@@ -1,3 +1,5 @@
+#utils/data_provider.py
+
 from utils import cache
 # minimal provider - first read cache, else stub responses
 def get_price(symbol):
