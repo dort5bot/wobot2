@@ -3,13 +3,12 @@ import os
 import logging
 from typing import Optional, Dict, Any
 from . import binance_api, db
-import asyncio
 import math
 
 LOG = logging.getLogger("order_manager")
 LOG.addHandler(logging.NullHandler())
 
-PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() in ("1","true","yes")
+PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() in ("1", "true", "yes")
 
 class OrderManager:
     def __init__(self, api_module=binance_api, risk_per_trade: float = 0.01, leverage: int = 1, paper_mode: Optional[bool] = None):
@@ -52,19 +51,25 @@ class OrderManager:
         dec = decision.get("decision")
         strength = float(decision.get("strength", 0.0))
         reason = decision.get("reason", "")
+
         if dec == "HOLD":
             LOG.info("Decision HOLD for %s: %s", symbol, reason)
             return {"ok": True, "note": "HOLD"}
+
         balance = await self.get_futures_balance()
         if balance is None:
             LOG.warning("Cannot read futures balance; aborting decision")
             return {"ok": False, "error": "no_balance"}
+
         base_risk = self.risk_per_trade
         scaled_risk = min(0.5, base_risk * (0.5 + strength))
+
         price = await self.api.get_price(symbol)
         if price is None:
             return {"ok": False, "error": "no_price"}
+
         qty = await self.calc_futures_qty(balance, price, risk_pct=scaled_risk)
         result = await self.place_futures_market(symbol, dec, qty)
+
         LOG.info("Executed %s %s qty=%s result=%s", dec, symbol, qty, result)
         return {"ok": True, "result": result}
