@@ -19,6 +19,10 @@ WORKER_A_TASKS = [
 # -------------------------------
 # Worker B: Sinyal değerlendirme interval’i
 WORKER_B_INTERVAL = 5  # saniye cinsinden, dinamik sleep ile kullanılacak
+# Worker B pipeline ayarları (opsiyonel; yoksa WorkerB varsayılanları kullanır)
+WORKER_B_WORKERS = 3            # paralel worker sayısı
+WORKER_B_PROC_MAXSIZE = 2000    # işlem kuyruğu kapasitesi
+
 
 # -------------------------------
 # Takip edilecek semboller
