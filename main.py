@@ -1,6 +1,8 @@
 
-# main.py — Render Free WebService uyumlu Telegram Bot + Worker orchestrator
-# - Modern asyncio lifecycle (asyncio.run)
+# main.py
+# Render Free WebService uyumlu Telegram Bot + Worker orchestrator
+# PTB v20+ uyumlu
+#- Modern asyncio lifecycle (asyncio.run)
 # - Worker A & B paralel çalışır
 # - PTB Application entegre
 # - Render Free için keep-alive web server eklenmiş (aiohttp) web server (port env üzerinden)
@@ -13,7 +15,7 @@
 # 	7. CPU dostu: Workers kendi içlerinde interval ve sleep mantığına göre çalışıyor.
 # 	8. Async güvenli: loop.create_task + asyncio.run uyumlu, KeyboardInterrupt veya Render stop signal ile uyumlu.
 #
-
+#---------------------------------
 # main.py — PTB Application + Worker orchestrator + Render Free WebServer
 import asyncio
 import logging
