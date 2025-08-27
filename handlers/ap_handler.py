@@ -1,6 +1,5 @@
-#handlers/ap_handler.py
-# api key entegre 
-
+# handlers/ap_handler
+#+debug lu
 import asyncio
 import logging
 from telegram import Update
@@ -12,14 +11,14 @@ from utils.binance_api import BinanceClient
 LOG = logging.getLogger(__name__)
 LOG.addHandler(logging.NullHandler())
 
-# /ap [symbols...] -> Altcoin short skorları
+# --- /ap [symbols...] -> Altcoin short skorları (Debug + API Key entegre) ---
 async def ap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("AP skor raporu hazırlanıyor... ⏳")
     try:
         user_id = update.effective_user.id
 
         # Kullanıcıdan coin listesi al
-        symbols = context.args if context.args else ["BTCUSDT","ETHUSDT","SOLUSDT"]
+        symbols = context.args if context.args else ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
         # Kullanıcının şifreli API key’i DB’den al
         user_key = get_apikey(user_id)
@@ -34,18 +33,32 @@ async def ap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.edit_text("❌ API key format hatası. Lütfen yeniden girin (/apikey).")
             return
 
+        LOG.debug(f"User {user_id} API key alındı.")
+
         # BinanceClient oluştur
         client = BinanceClient(api_key, secret_key)
 
         # Skorları hesapla
-        lines = await build_ap_report_lines_pro(client=client, symbols=symbols)
+        try:
+            results = await build_ap_report_lines_pro(client=client, symbols=symbols)
+            LOG.debug(f"build_ap_report_lines_pro sonuçları: {results}")
+        except Exception as e:
+            LOG.exception("AP raporu oluşturulurken hata oluştu")
+            await msg.edit_text(f"❌ Skor hesaplanamadı: {e}")
+            return
+
+        if not results:
+            await msg.edit_text(
+                "⚠️ Skorlar boş döndü. API key doğru mu? Binance verisi erişilebilir mi?"
+            )
+            return
 
         # Mesajı güncelle
-        text = "\n".join(lines) if lines else "⚠️ Skor bulunamadı."
+        text = "\n".join(results)
         await msg.edit_text(text)
 
     except Exception as e:
-        LOG.exception("AP handler error:")
+        LOG.exception("AP handler genel hata:")
         await msg.edit_text(f"❌ Hata oluştu: {e}")
 
 
