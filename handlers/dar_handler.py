@@ -55,6 +55,9 @@ FILE_INFO = {
     '.gitignore': (None, None),
 }
 
+#--bot/repo adını otomatik al---
+BOT_NAME = os.path.basename(os.path.abspath(ROOT_DIR))  # klasör adı alınır
+
 #--dar komutu---
 def format_tree(root_dir):
     tree_lines = []
@@ -149,7 +152,6 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ /dar k komutu → otomatik komut listesi (alfabetik)
     if mode == "k":
         scanned = scan_handlers_for_commands()
-        #lines = [f"{cmd} → {desc}" for cmd, desc in sorted(scanned.items())]
         lines = [f"{cmd} → {desc}" for cmd, desc in sorted(scanned.items(), key=lambda x: x[0].lower())]
         text = "\n".join(lines) if lines else "Komut bulunamadı."
         await update.message.reply_text(f"<pre>{text}</pre>", parse_mode="HTML")
@@ -159,7 +161,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%m%d_%H%M%S")
 
     if mode.upper() == "Z":
-        zip_filename = f"Dbot_{timestamp}.zip"
+        zip_filename = f"{BOT_NAME}_{timestamp}.zip"
         create_zip_with_tree_and_files(ROOT_DIR, zip_filename)
         with open(zip_filename, "rb") as f:
             await update.message.reply_document(document=f, filename=zip_filename)
@@ -167,7 +169,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(tree_text) > TELEGRAM_MSG_LIMIT:
-        txt_filename = f"Dbot_{timestamp}.txt"
+        txt_filename = f"{BOT_NAME}_{timestamp}.txt"
         with open(txt_filename, 'w', encoding='utf-8') as f:
             f.write(tree_text)
         with open(txt_filename, 'rb') as f:
@@ -180,3 +182,4 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #--plugin loader---
 def register(app):
     app.add_handler(CommandHandler("dar", dar_command))
+    
