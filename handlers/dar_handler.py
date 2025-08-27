@@ -55,13 +55,12 @@ FILE_INFO = {
     '.gitignore': (None, None),
 }
 
-#--bot/repo adını otomatik al---
 BOT_NAME = os.path.basename(os.path.abspath(ROOT_DIR))  # klasör adı alınır
 
-#--dar komutu---
+#--dar komutu yardımcıları---
 def format_tree(root_dir):
     tree_lines = []
-    valid_files = []  # sadece eklenecek dosyalar
+    valid_files = []
 
     def walk(dir_path, prefix=""):
         items = sorted(os.listdir(dir_path))
@@ -75,7 +74,6 @@ def format_tree(root_dir):
                 tree_lines.append(f"{prefix}{connector}{item}/")
                 walk(path, prefix + ("    " if i == len(items) - 1 else "│   "))
             else:
-                # gizli dosya kontrolü
                 if item.startswith(".") and item not in [".env", ".gitignore"]:
                     continue
                 ext = os.path.splitext(item)[1]
@@ -92,13 +90,10 @@ def format_tree(root_dir):
     walk(root_dir)
     return "\n".join(tree_lines), valid_files
 
-#--ZIP oluşturucu---
 def create_zip_with_tree_and_files(root_dir, zip_filename):
     tree_text, valid_files = format_tree(root_dir)
     with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        # ağacı ekle
         zipf.writestr("tree.txt", tree_text)
-        # sadece ağaçta olan dosyaları ekle (klasör yapısıyla)
         for filepath in valid_files:
             arcname = os.path.relpath(filepath, root_dir)
             try:
@@ -107,15 +102,13 @@ def create_zip_with_tree_and_files(root_dir, zip_filename):
                 pass
     return zip_filename
 
-#--handlers içinden komutları tara---
 def scan_handlers_for_commands():
     commands = {}
     handler_dir = os.path.join(ROOT_DIR, "handlers")
 
-    # Regexler
-    handler_pattern = re.compile(r'CommandHandler\(\s*["\'](\w+)["\']')   # doğrudan string
-    var_handler_pattern = re.compile(r'CommandHandler\(\s*(\w+)')         # değişken (COMMAND)
-    command_pattern = re.compile(r'COMMAND\s*=\s*["\'](\w+)["\']')        # COMMAND = "..."
+    handler_pattern = re.compile(r'CommandHandler\(\s*["\'](\w+)["\']')
+    var_handler_pattern = re.compile(r'CommandHandler\(\s*(\w+)')
+    command_pattern = re.compile(r'COMMAND\s*=\s*["\'](\w+)["\']')
 
     for fname in os.listdir(handler_dir):
         if not fname.endswith("_handler.py"):
@@ -124,14 +117,10 @@ def scan_handlers_for_commands():
         try:
             with open(fpath, "r", encoding="utf-8") as f:
                 content = f.read()
-
-            # 1) Direkt tırnaklı CommandHandler
             matches = handler_pattern.findall(content)
             for cmd in matches:
                 desc = COMMAND_INFO.get(cmd.lower(), "(?)")
                 commands[f"/{cmd}"] = f"{desc} ({fname})"
-
-            # 2) CommandHandler(COMMAND, ...)
             matches_var = var_handler_pattern.findall(content)
             if "COMMAND" in matches_var:
                 cmd_match = command_pattern.search(content)
@@ -139,17 +128,15 @@ def scan_handlers_for_commands():
                     cmd = cmd_match.group(1)
                     desc = COMMAND_INFO.get(cmd.lower(), "(?)")
                     commands[f"/{cmd}"] = f"{desc} ({fname})"
-
         except Exception:
             continue
     return commands
 
-#--dar komutu handler---
+#--dar komutu---
 async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     mode = args[0].lower() if args else ""
 
-    # ✅ /dar k komutu → otomatik komut listesi (alfabetik)
     if mode == "k":
         scanned = scan_handlers_for_commands()
         lines = [f"{cmd} → {desc}" for cmd, desc in sorted(scanned.items(), key=lambda x: x[0].lower())]
@@ -182,4 +169,3 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #--plugin loader---
 def register(app):
     app.add_handler(CommandHandler("dar", dar_command))
-    
