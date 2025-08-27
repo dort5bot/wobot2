@@ -1,8 +1,19 @@
+
 # main.py — Render Free WebService uyumlu Telegram Bot + Worker orchestrator
 # - Modern asyncio lifecycle (asyncio.run)
 # - Worker A & B paralel çalışır
 # - PTB Application loader uyumlu (DummyApp ile placeholder)
 # - Render Free için zorunlu keep-alive web server eklenmiş (aiohttp)
+# - Graceful shutdown, exception handling, logging iyileştirildi
+# 	1. Logging iyileştirildi: timestamp + level + message format.
+# 	2. Workers ayrı task listesinde → shutdown sırasında hepsi güvenli cancel ediliyor.
+# 	3. Graceful shutdown → Ctrl+C veya SIGTERM ile tüm workers güvenli şekilde duruyor.
+# 	4. Exception handling → handler yükleme veya main loop hataları log’lanıyor.
+# 	5. Keep-alive server → Render Free web service için port 10000 sabit ve bind edilebilir.
+# 	6. Kolay geliştirilebilir: Yeni worker eklemek için start_workers listesine eklemek yeterli.
+# 	7. CPU dostu: Workers kendi içlerinde interval ve sleep mantığına göre çalışıyor.
+# 	8. Async güvenli: loop.create_task + asyncio.run uyumlu, KeyboardInterrupt veya Render stop signal ile uyumlu.
+#
 
 import asyncio
 import logging
@@ -23,7 +34,7 @@ app = DummyApp()
 
 # -------------------------------
 # Logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 LOG = logging.getLogger("main")
 
 # -------------------------------
@@ -31,15 +42,36 @@ LOG = logging.getLogger("main")
 async def handle_root(request):
     return web.Response(text="Bot is alive!")
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_root)
+async def start_web_server(port: int = 10000):
+    web_app = web.Application()
+    web_app.router.add_get("/", handle_root)
 
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(web_app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 10000)  # Render dinlediği port
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    LOG.info("Web server started on port 10000 (Render keep-alive).")
+    LOG.info("Web server started on port %d (Render keep-alive).", port)
+
+# -------------------------------
+# Worker task starter
+def start_workers(loop: asyncio.AbstractEventLoop):
+    tasks = [
+        loop.create_task(worker_a_run(), name="worker_a"),
+        loop.create_task(worker_b_run(), name="worker_b"),
+    ]
+    return tasks
+
+# -------------------------------
+# Graceful shutdown helper
+async def shutdown(loop, stop_event: asyncio.Event, tasks):
+    LOG.info("Shutting down background tasks...")
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    LOG.info("All background tasks stopped.")
+    stop_event.set()
+    # Stop loop
+    loop.stop()
 
 # -------------------------------
 # Main async entry
@@ -47,12 +79,18 @@ async def async_main():
     LOG.info("Booting orchestrator...")
 
     # Handlers
-    register_handlers(app)
+    try:
+        register_handlers(app)
+        LOG.info("Handlers registered successfully.")
+    except Exception as e:
+        LOG.exception("Error registering handlers: %s", e)
+
+    # Event loop
+    loop = asyncio.get_running_loop()
 
     # Workers
-    loop = asyncio.get_running_loop()
-    loop.create_task(worker_a_run(), name="worker_a")
-    loop.create_task(worker_b_run(), name="worker_b")
+    tasks = start_workers(loop)
+    LOG.info("Worker A & B tasks started.")
 
     # Keep-alive web server
     await start_web_server()
@@ -60,9 +98,10 @@ async def async_main():
     # Graceful shutdown için event
     stop_event = asyncio.Event()
 
+    # Signal handler
     def _request_shutdown(signame: str):
-        LOG.warning("Signal received: %s — shutting down...", signame)
-        stop_event.set()
+        LOG.warning("Signal received: %s — initiating shutdown...", signame)
+        asyncio.create_task(shutdown(loop, stop_event, tasks))
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -70,9 +109,14 @@ async def async_main():
         except NotImplementedError:
             signal.signal(sig, lambda *_: _request_shutdown(sig.name))
 
+    # Wait until stop requested
     await stop_event.wait()
     LOG.info("Shutdown complete. Bye.")
 
 # -------------------------------
 if __name__ == "__main__":
-    asyncio.run(async_main())
+    try:
+        asyncio.run(async_main())
+    except Exception:
+        LOG.exception("Fatal error in main loop.")
+        
