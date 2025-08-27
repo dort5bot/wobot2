@@ -2,7 +2,7 @@
 # async uyumlu, PTB v20+ uyumlu 
 # 1. config_worker.WORKER_B_INTERVAL üzerinden interval ayarlanabilir
 # 2. Döngü sleep süresi CPU dostu, interval’in 1/5’i kadar bekler
-# sinyal uretici
+# sinyal uretici ta_utils.py ile
 # jobs/worker_b.py
 import asyncio
 import logging
