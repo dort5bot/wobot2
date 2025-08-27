@@ -1,1 +1,28 @@
+# main.py
+# Render / Heroku / Docker friendly Telegram bot orchestrator (PTB v20+)
+# - Async lifecycle: asyncio.run(async_main())
+# - PTB Application properly initialized & started before polling
+# - Workers (A & B) run in separate asyncio tasks and are cleanly cancelled on shutdown
+# - Keep-alive web server (aiohttp) for platform health checks
+# - Robust graceful shutdown on SIGINT/SIGTERM (and Windows fallback)
+# - Improved logging + defensive error handling
+#
+# Nasıl çalışır (özeti):
+# 1. Application oluşturulur (ApplicationBuilder).
+# 2. Handlers yüklenir (utils.handler_loader.load_handlers).
+# 3. Workers başlatılır (jobs.worker_a.run_forever, jobs.worker_b.run_forever).
+# 4. Web server (aiohttp) başlatılır.
+# 5. PTB lifecycle: initialize() -> start() -> polling görevini ayrı Task olarak çalıştır.
+# 6. SIGINT/SIGTERM alınca: workers ve polling task güvenli şekilde iptal edilir, ardından app.stop/shutdown/cleanup çalıştırılır.
+#
+# Notlar / Önemli:
+# * PTB v20+ ile "start" çağrılmadan önce initialize() çağrılmazsa yukarıdaki RuntimeError alınır.
+# * Polling uzun süreli (blocking) coroutine olabilir; bu yüzden ayrı task olarak çalıştırıyoruz.
+# * `shutdown()` içinde loop.stop() çağırmıyoruz — asyncio.run flow'una bırakıyoruz.
+# * Worker'ların kendi içinde exception handle etmesi önerilir; burada genel cancel & gather yapıyoruz.
+#
+# Geliştirmek için:
+# - Yeni worker eklemek için start_worker_coros listesine run_coroutine ekle.
+# - metrics / prometheus endpoint ekle (web server'e).
+# - health/readiness endpointleri genişlet.
 
