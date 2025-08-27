@@ -1,15 +1,16 @@
-# handlers/signal_handler.py - auto-converted stub to use data_provider
-from utils import data_provider as dp
-async def register(app):
-    # app.add_handler(CommandHandler(...)) - implement registration in your main.py
-    pass
+# handlers/signal_handler.py
+from utils.signal_evaluator import Signal
+from typing import Dict, Any
 
-# Example handler function
-async def handle(update, context):
-    # replace with proper command logic
-    data = dp.get_price("BTCUSDT")
-    try:
-        await update.message.reply_text(f"BTCUSDT: {data}")
-    except Exception:
-        if hasattr(context, 'bot'):
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"BTCUSDT: {data}")
+evaluator = None
+
+def set_evaluator(ev):
+    global evaluator
+    evaluator = ev
+
+async def publish_signal(source: str, symbol: str, type_: str, strength: float = 0.5, payload: Dict = None):
+    if evaluator is None:
+        print("SignalEvaluator not set; dropping signal", source, symbol, type_)
+        return
+    sig = Signal(source=source, symbol=symbol, type_=type_, strength=strength, payload=payload)
+    await evaluator.publish(sig)

@@ -1,15 +1,19 @@
-# handlers/command_info.py - auto-converted stub to use data_provider
-from utils import data_provider as dp
-async def register(app):
-    # app.add_handler(CommandHandler(...)) - implement registration in your main.py
-    pass
+# handlers/command_info.py
+# Tüm komutların açıklamaları burada tutulur
 
-# Example handler function
-async def handle(update, context):
-    # replace with proper command logic
-    data = dp.get_price("BTCUSDT")
-    try:
-        await update.message.reply_text(f"BTCUSDT: {data}")
-    except Exception:
-        if hasattr(context, 'bot'):
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"BTCUSDT: {data}")
+COMMAND_INFO = {
+    "dar": "/dar: Dosya ağacı, /dar k: komut listesi, /dar z:repo zip",
+    "io": "In-Out Alış Satış Baskısı raporu",
+    "nls": "Balina hareketleri ve yoğunluk (NLS analizi)",
+    "npr": "Nakit Piyasa Raporu",
+    "eft": "ETF & ABD piyasaları",
+    "ap": "Altların Güç Endeksi (AP)",
+    "p": "/p liste, /p n: hacimli n coin, /p coin1...: sorgu Anlıkfiyat+24hdeğişim+hacim",
+    "p_ekle": "Favori coin listesine coin ekler",
+    "p_fav": "Favori coin listesini gösterir",
+    "p_sil": "Favori coin listesinden coin siler",
+    "fr": "Funding Rate raporu ve günlük CSV kaydı",
+    "whale": "Whale Alerts raporu ve günlük CSV kaydı",
+    "t":"/t: hazir liste, /t sayı: hacimli n tanesi, /t coin zaman: istedigin coine ve istenen zamana iat bilgi",
+    "⚡":"❗",
+}

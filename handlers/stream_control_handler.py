@@ -1,15 +1,25 @@
-# handlers/stream_control_handler.py - auto-converted stub to use data_provider
-from utils import data_provider as dp
-async def register(app):
-    # app.add_handler(CommandHandler(...)) - implement registration in your main.py
-    pass
+# Dinamik stream ekleme/çıkarma (
+#handlers/stream_control_handler.py
 
-# Example handler function
-async def handle(update, context):
-    # replace with proper command logic
-    data = dp.get_price("BTCUSDT")
-    try:
-        await update.message.reply_text(f"BTCUSDT: {data}")
-    except Exception:
-        if hasattr(context, 'bot'):
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"BTCUSDT: {data}")
+from telegram.ext import CommandHandler
+
+async def add_stream(update, context):
+    symbol = context.args[0].upper() if context.args else None
+    if not symbol:
+        await update.message.reply_text("Usage: /add_stream SYMBOL")
+        return
+    # stream_mgr global veya singleton olmalı
+    stream_mgr.add_symbol(symbol)
+    await update.message.reply_text(f"Stream added: {symbol}")
+
+async def remove_stream(update, context):
+    symbol = context.args[0].upper() if context.args else None
+    if not symbol:
+        await update.message.reply_text("Usage: /remove_stream SYMBOL")
+        return
+    stream_mgr.remove_symbol(symbol)
+    await update.message.reply_text(f"Stream removed: {symbol}")
+
+def register(application):
+    application.add_handler(CommandHandler("add_stream", add_stream))
+    application.add_handler(CommandHandler("remove_stream", remove_stream))

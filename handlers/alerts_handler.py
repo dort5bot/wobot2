@@ -1,15 +1,18 @@
-# handlers/alerts_handler.py - auto-converted stub to use data_provider
-from utils import data_provider as dp
-async def register(app):
-    # app.add_handler(CommandHandler(...)) - implement registration in your main.py
-    pass
+# handlers/alerts_handler.py
+##♦️merkezi telegram alert wrapper
+#alerts_handler.py → Telegram’a mesaj atmak gibi genel amaçlı uyarılar içindir
 
-# Example handler function
-async def handle(update, context):
-    # replace with proper command logic
-    data = dp.get_price("BTCUSDT")
-    try:
-        await update.message.reply_text(f"BTCUSDT: {data}")
-    except Exception:
-        if hasattr(context, 'bot'):
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"BTCUSDT: {data}")
+
+import os
+from utils.monitoring import telegram_alert, configure_logging
+import logging
+
+LOG = logging.getLogger("alerts_handler")
+
+def alert_info(msg: str):
+    LOG.info("ALERT: %s", msg)
+    telegram_alert(msg)
+
+def alert_error(msg: str):
+    LOG.error("ALERT: %s", msg)
+    telegram_alert(msg)
