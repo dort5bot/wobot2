@@ -1,8 +1,11 @@
 # utils/config_worker.py
+# worker’a özel, trade ve işlemle ilgili ayarlar (risk limitleri, pozisyon boyutu, trade frekansı vb.)
 # 	1. WORKER_A_TASKS → worker_a.py’nin loop’unda interval kontrolü için kullanılıyor.
 # 	2. WORKER_B_INTERVAL → worker_b.py’nin loop’unda kullanılıyor.
 # 	3. CACHE_TTL_SECONDS → hafizada tutma süresi. her task’in cache süresini ayrı ayrı tutuyor.
 # 	4. SYMBOLS → hem worker_a hem worker_b tarafından kullanılıyor.
+# RISK_MAX_DAILY_LOSS = 100  # günlük max kayıp örnek
+# DB_PATH = "db/trades.sqlite"  # worker için DB path
 
 # -------------------------------
 # Worker A: Ticker ve Funding task’leri
@@ -33,3 +36,9 @@ CACHE_MAX_ROWS_PER_KEY = 100  # cache boyutu limit
 # -------------------------------
 # Opsiyonel: ileride ek task veya parametreler
 # WORKER_A_TASKS.append({"name": "open_interest", "interval": 1800})
+
+
+
+# utla/risk_manage.py
+RISK_MAX_DAILY_LOSS = 100  # günlük max kayıp örnek
+DB_PATH = "db/trades.sqlite"  # worker için DB path
