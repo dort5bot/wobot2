@@ -1,6 +1,9 @@
 # main.py
 # Render / Heroku / Docker friendly Telegram bot orchestrator (PTB v20+)
-# PTB v20+ async lifecycle uyumlu, worker, webserver ve signal handling korunmuş
+# Async lifecycle: asyncio.run(async_main())
+# Workers (A & B) run in separate asyncio tasks
+# Keep-alive web server (aiohttp) for health checks
+# Graceful shutdown on SIGINT/SIGTERM
 
 import asyncio
 import logging
@@ -153,7 +156,6 @@ async def async_main():
         await application.initialize()
         LOG.info("Starting PTB Application...")
         await application.start()
-        # Polling task için run_polling() kullanıyoruz
         polling_task = loop.create_task(application.run_polling(), name="ptb_polling")
         LOG.info("PTB Application started and polling task created.")
     except Exception:
