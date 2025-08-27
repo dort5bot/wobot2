@@ -25,7 +25,7 @@ LOG = logging.getLogger("main")
 # -------------------------------
 # Constants
 DEFAULT_PORT = 8080
-TELEGRAM_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
+TELEGRAM_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 
 # -------------------------------
 # Keep-alive / Health server
