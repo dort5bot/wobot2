@@ -3,8 +3,7 @@
 # - Modern asyncio lifecycle (asyncio.run)
 # - Worker A & B paralel çalışır
 # - PTB Application loader uyumlu (DummyApp ile placeholder)
-# - Render Free için zorunlu keep-alive web server eklenmiş (aiohttp)
-# - Graceful shutdown, exception handling, logging iyileştirildi
+# - Render Free için keep-alive web server eklenmiş (aiohttp) web server (port env üzerinden)
 # 	1. Logging iyileştirildi: timestamp + level + message format.
 # 	2. Workers ayrı task listesinde → shutdown sırasında hepsi güvenli cancel ediliyor.
 # 	3. Graceful shutdown → Ctrl+C veya SIGTERM ile tüm workers güvenli şekilde duruyor.
@@ -17,6 +16,7 @@
 
 import asyncio
 import logging
+import os
 import signal
 from aiohttp import web
 
@@ -38,11 +38,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 LOG = logging.getLogger("main")
 
 # -------------------------------
-# Keep-alive web service (Render port binding için)
+# Keep-alive web server
 async def handle_root(request):
     return web.Response(text="Bot is alive!")
 
-async def start_web_server(port: int = 8080):
+async def start_web_server():
+    port = int(os.getenv("PORT", 8080))  # .env üzerinden al, default 8080
     web_app = web.Application()
     web_app.router.add_get("/", handle_root)
 
@@ -70,15 +71,14 @@ async def shutdown(loop, stop_event: asyncio.Event, tasks):
     await asyncio.gather(*tasks, return_exceptions=True)
     LOG.info("All background tasks stopped.")
     stop_event.set()
-    # Stop loop
     loop.stop()
 
 # -------------------------------
-# Main async entry
+# Async main fonksiyonu
 async def async_main():
     LOG.info("Booting orchestrator...")
 
-    # Handlers
+    # Handlers yükle
     try:
         load_handlers(app)
         LOG.info("Handlers registered successfully.")
@@ -88,7 +88,7 @@ async def async_main():
     # Event loop
     loop = asyncio.get_running_loop()
 
-    # Workers
+    # Workers başlat
     tasks = start_workers(loop)
     LOG.info("Worker A & B tasks started.")
 
@@ -109,14 +109,17 @@ async def async_main():
         except NotImplementedError:
             signal.signal(sig, lambda *_: _request_shutdown(sig.name))
 
-    # Wait until stop requested
     await stop_event.wait()
     LOG.info("Shutdown complete. Bye.")
 
 # -------------------------------
-if __name__ == "__main__":
+# Main entry
+def main():
     try:
         asyncio.run(async_main())
     except Exception:
         LOG.exception("Fatal error in main loop.")
-        
+
+# -------------------------------
+if __name__ == "__main__":
+    main()
