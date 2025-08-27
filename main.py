@@ -2,7 +2,7 @@
 # main.py — Render Free WebService uyumlu Telegram Bot + Worker orchestrator
 # - Modern asyncio lifecycle (asyncio.run)
 # - Worker A & B paralel çalışır
-# - PTB Application loader uyumlu (DummyApp ile placeholder)
+# - PTB Application entegre
 # - Render Free için keep-alive web server eklenmiş (aiohttp) web server (port env üzerinden)
 # 	1. Logging iyileştirildi: timestamp + level + message format.
 # 	2. Workers ayrı task listesinde → shutdown sırasında hepsi güvenli cancel ediliyor.
@@ -80,9 +80,9 @@ async def async_main():
     LOG.info("Booting orchestrator...")
 
     # PTB Application oluştur
-    token = os.getenv("TELEGRAM_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        LOG.error("TELEGRAM_TOKEN env not set!")
+        LOG.error("TELEGRAM_BOT_TOKEN env not set!")
         return
     application = ApplicationBuilder().token(token).build()
 
