@@ -3,7 +3,8 @@
 
 import time
 import os
-from utils.config import RISK_MAX_DAILY_LOSS, DB_PATH
+from utils.config_worker import RISK_MAX_DAILY_LOSS, DB_PATH
+
 import sqlite3
 
 class RiskManager:
