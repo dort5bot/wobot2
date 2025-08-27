@@ -1,3 +1,5 @@
+##utils/config_worker.py
+#
 WORKER_A_TASKS = [
     {"name": "ticker", "interval": 10},
     {"name": "funding", "interval": 60},
