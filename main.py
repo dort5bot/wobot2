@@ -9,7 +9,7 @@
 # 	2. Workers ayrı task listesinde → shutdown sırasında hepsi güvenli cancel ediliyor.
 # 	3. Graceful shutdown → Ctrl+C veya SIGTERM ile tüm workers güvenli şekilde duruyor.
 # 	4. Exception handling → handler yükleme veya main loop hataları log’lanıyor.
-# 	5. Keep-alive server → Render Free web service için port 10000 sabit ve bind edilebilir.
+# 	5. Keep-alive server → Render Free web service için port 8080 sabit ve bind edilebilir.
 # 	6. Kolay geliştirilebilir: Yeni worker eklemek için start_workers listesine eklemek yeterli.
 # 	7. CPU dostu: Workers kendi içlerinde interval ve sleep mantığına göre çalışıyor.
 # 	8. Async güvenli: loop.create_task + asyncio.run uyumlu, KeyboardInterrupt veya Render stop signal ile uyumlu.
@@ -42,7 +42,7 @@ LOG = logging.getLogger("main")
 async def handle_root(request):
     return web.Response(text="Bot is alive!")
 
-async def start_web_server(port: int = 10000):
+async def start_web_server(port: int = 8080):
     web_app = web.Application()
     web_app.router.add_get("/", handle_root)
 
