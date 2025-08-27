@@ -3,15 +3,19 @@
 # /dar      -> Dosya ağacı (mesaj, uzun olursa TXT)
 # /dar Z    -> ZIP (tree.txt + içerikler, sadece listelenen dosyalar + .env + .gitignore)
 # /dar k    -> alfabetik sirali komut listesi + varsa eşleştirme handlers/command_info.py
-
+# dosya adi .env den alir BOT_NAME
 import os
 import re
 import zipfile
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
+from dotenv import load_dotenv
 
 from handlers.command_info import COMMAND_INFO  # ✅ komut açıklamaları import edildi
+
+load_dotenv()  # .env dosyasını yükle
+BOT_NAME = os.getenv("BOT_NAME", "xbot")  # .env varsa bot adı, yoksa "xbot"
 
 ROOT_DIR = '.'
 TELEGRAM_MSG_LIMIT = 4000
@@ -54,8 +58,6 @@ FILE_INFO = {
     '.env': (None, None),
     '.gitignore': (None, None),
 }
-
-BOT_NAME = os.path.basename(os.path.abspath(ROOT_DIR))  # klasör adı alınır
 
 #--dar komutu yardımcıları---
 def format_tree(root_dir):
@@ -149,21 +151,33 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if mode.upper() == "Z":
         zip_filename = f"{BOT_NAME}_{timestamp}.zip"
-        create_zip_with_tree_and_files(ROOT_DIR, zip_filename)
-        with open(zip_filename, "rb") as f:
-            await update.message.reply_document(document=f, filename=zip_filename)
-        os.remove(zip_filename)
+        try:
+            create_zip_with_tree_and_files(ROOT_DIR, zip_filename)
+            with open(zip_filename, "rb") as f:
+                await update.message.reply_document(document=f, filename=zip_filename)
+        except Exception as e:
+            await update.message.reply_text(f"Hata oluştu: {e}")
+        finally:
+            if os.path.exists(zip_filename):
+                os.remove(zip_filename)
         return
 
+    # Uzun mesajları segmentlere böl
     if len(tree_text) > TELEGRAM_MSG_LIMIT:
         txt_filename = f"{BOT_NAME}_{timestamp}.txt"
-        with open(txt_filename, 'w', encoding='utf-8') as f:
-            f.write(tree_text)
-        with open(txt_filename, 'rb') as f:
-            await update.message.reply_document(document=f)
-        os.remove(txt_filename)
+        try:
+            with open(txt_filename, 'w', encoding='utf-8') as f:
+                f.write(tree_text)
+            with open(txt_filename, 'rb') as f:
+                await update.message.reply_document(document=f)
+        except Exception as e:
+            await update.message.reply_text(f"Hata oluştu: {e}")
+        finally:
+            if os.path.exists(txt_filename):
+                os.remove(txt_filename)
         return
 
+    # Normal kısa mesaj
     await update.message.reply_text(f"<pre>{tree_text}</pre>", parse_mode="HTML")
 
 #--plugin loader---
