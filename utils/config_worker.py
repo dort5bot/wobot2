@@ -1,7 +1,7 @@
 # utils/config_worker.py
 # 	1. WORKER_A_TASKS → worker_a.py’nin loop’unda interval kontrolü için kullanılıyor.
 # 	2. WORKER_B_INTERVAL → worker_b.py’nin loop’unda kullanılıyor.
-# 	3. CACHE_TTL_SECONDS → her task’in cache süresini ayrı ayrı tutuyor.
+# 	3. CACHE_TTL_SECONDS → hafizada tutma süresi. her task’in cache süresini ayrı ayrı tutuyor.
 # 	4. SYMBOLS → hem worker_a hem worker_b tarafından kullanılıyor.
 
 # -------------------------------
