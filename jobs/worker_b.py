@@ -1,3 +1,5 @@
+##jobs/worker_b.py
+
 import asyncio
 from utils import data_provider as dp, risk_manager, order_manager, signal_evaluator, config_worker
 async def run_forever():
