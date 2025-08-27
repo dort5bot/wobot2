@@ -20,7 +20,7 @@ import logging
 import signal
 from aiohttp import web
 
-from utils.handler_loader import register_handlers
+from utils.handler_loader import load_handlers
 from jobs.worker_a import run_forever as worker_a_run
 from jobs.worker_b import run_forever as worker_b_run
 
@@ -80,7 +80,7 @@ async def async_main():
 
     # Handlers
     try:
-        register_handlers(app)
+        load_handlers(app)
         LOG.info("Handlers registered successfully.")
     except Exception as e:
         LOG.exception("Error registering handlers: %s", e)
