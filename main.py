@@ -14,23 +14,17 @@
 # 	8. Async güvenli: loop.create_task + asyncio.run uyumlu, KeyboardInterrupt veya Render stop signal ile uyumlu.
 #
 
+# main.py — PTB Application + Worker orchestrator + Render Free WebServer
 import asyncio
 import logging
 import os
 import signal
 from aiohttp import web
+from telegram.ext import ApplicationBuilder
 
 from utils.handler_loader import load_handlers
 from jobs.worker_a import run_forever as worker_a_run
 from jobs.worker_b import run_forever as worker_b_run
-
-# -------------------------------
-# Minimal PTB-like skeleton (gerçek Application yerine Dummy)
-class DummyApp:
-    def add_handler(self, h):
-        pass
-
-app = DummyApp()
 
 # -------------------------------
 # Logging
@@ -43,7 +37,7 @@ async def handle_root(request):
     return web.Response(text="Bot is alive!")
 
 async def start_web_server():
-    port = int(os.getenv("PORT", 8080))  # .env üzerinden al, default 8080
+    port = int(os.getenv("PORT", 8080))
     web_app = web.Application()
     web_app.router.add_get("/", handle_root)
 
@@ -64,12 +58,19 @@ def start_workers(loop: asyncio.AbstractEventLoop):
 
 # -------------------------------
 # Graceful shutdown helper
-async def shutdown(loop, stop_event: asyncio.Event, tasks):
+async def shutdown(loop, stop_event: asyncio.Event, tasks, app):
     LOG.info("Shutting down background tasks...")
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
     LOG.info("All background tasks stopped.")
+
+    if app:
+        await app.stop()
+        await app.shutdown()
+        await app.cleanup()
+        LOG.info("PTB Application stopped.")
+
     stop_event.set()
     loop.stop()
 
@@ -78,9 +79,16 @@ async def shutdown(loop, stop_event: asyncio.Event, tasks):
 async def async_main():
     LOG.info("Booting orchestrator...")
 
+    # PTB Application oluştur
+    token = os.getenv("TELEGRAM_TOKEN")
+    if not token:
+        LOG.error("TELEGRAM_TOKEN env not set!")
+        return
+    application = ApplicationBuilder().token(token).build()
+
     # Handlers yükle
     try:
-        load_handlers(app)
+        load_handlers(application)
         LOG.info("Handlers registered successfully.")
     except Exception as e:
         LOG.exception("Error registering handlers: %s", e)
@@ -95,13 +103,18 @@ async def async_main():
     # Keep-alive web server
     await start_web_server()
 
+    # PTB Application background start
+    asyncio.create_task(application.initialize())
+    asyncio.create_task(application.start())
+    LOG.info("PTB Application started.")
+
     # Graceful shutdown için event
     stop_event = asyncio.Event()
 
     # Signal handler
     def _request_shutdown(signame: str):
         LOG.warning("Signal received: %s — initiating shutdown...", signame)
-        asyncio.create_task(shutdown(loop, stop_event, tasks))
+        asyncio.create_task(shutdown(loop, stop_event, tasks, application))
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
