@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder
 from utils.monitoring import configure_logging
 from utils.db import init_db
 from utils.config import CONFIG
-from handler_loader import load_handlers
+from utils.handler_loader import load_handlers
 
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
