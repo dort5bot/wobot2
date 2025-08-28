@@ -1,4 +1,7 @@
 # utils/config_worker.py
+"""
+Bunları eklemek sadece opsiyonel parametre yönetimi ve özelleştirme sağlar, işlevsellik için gerekli değil.
+
 # worker’a özel, trade ve işlemle ilgili ayarlar (risk limitleri, pozisyon boyutu, trade frekansı vb.)
 # 	1. WORKER_A_TASKS → worker_a.py’nin loop’unda interval kontrolü için kullanılıyor.
 # 	2. WORKER_B_INTERVAL → worker_b.py’nin loop’unda kullanılıyor.
@@ -11,6 +14,8 @@
 # Worker A: Ticker ve Funding task’leri
 # - interval: her task’in kaç saniyede bir çalışacağını belirler
 # - funding 8 saatte bir, ticker sık (örn. 10s)
+"""
+
 WORKER_A_TASKS = [
     {"name": "ticker", "interval": 10},        # Her 10 saniyede bir ticker çek
     {"name": "funding", "interval": 8*3600},  # Her 8 saatte bir funding çek
