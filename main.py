@@ -67,13 +67,19 @@ async def stop_worker(worker, name: str):
 async def main():
     configure_logging()
 
-    # DB init (sync fonksiyon, await değil)
+    # init_db async değil → direkt çağır
     init_db()
 
     # Load handlers
     token = CONFIG["TELEGRAM"]["TOKEN"]
     app = ApplicationBuilder().token(token).build()
     load_handlers(app)
+
+    #gerekli mi
+    LOG.info("Bot started")
+    await app.run_polling()
+
+    LOG.info("Bot stopped")
 
     # Workers
     worker_a = WorkerA()
