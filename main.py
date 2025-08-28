@@ -37,8 +37,11 @@ async def async_main():
 
     # Keep-alive webserver (Render ping)
     keep_alive()
+
+    # Load handlers
     load_handlers(app)
 
+    # Queue shared for WorkerA -> WorkerB
     kline_queue = asyncio.Queue()
 
     # Workers
@@ -49,8 +52,11 @@ async def async_main():
     worker_b = WorkerB(queue=kline_queue, signal_callback=signal_handler.publish_signal)
 
     # Start workers
+    LOG.info("Starting WorkerA...")
     worker_a.start()
+    LOG.info("Starting WorkerB...")
     worker_b.start()
+    LOG.info("Starting WorkerC...")
     worker_c.start()
 
     # Graceful shutdown event
@@ -76,30 +82,49 @@ async def async_main():
     port = int(os.getenv("PORT", 8000))
     webhook_url = f"{keepalive_url}/{token}"
 
+    # PTB async başlatma
+    LOG.info("Initializing PTB app...")
     await app.initialize()
     await app.start()
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
-    # close_loop=False ⚡ Render uyumlu
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        webhook_url=webhook_url,
-        stop_signals=None,
-        close_loop=False
+    # run_webhook, Render uyumlu close_loop=False
+    LOG.info("Running webhook...")
+    webhook_task = asyncio.create_task(
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            webhook_url=webhook_url,
+            stop_signals=None,
+            close_loop=False
+        )
     )
 
+    # Stop-event bekleme
     await stop_event.wait()
-    LOG.info("Shutting down...")
+    LOG.info("Stop event triggered. Shutting down...")
 
+    # Workers stop
+    LOG.info("Stopping WorkerA...")
+    worker_a.stop()
+    LOG.info("Stopping WorkerB...")
+    worker_b.stop()
+    LOG.info("Stopping WorkerC...")
+    worker_c.stop()
+    await asyncio.sleep(0.5)  # workers cancel gracefully
+
+    # PTB stop/shutdown
+    LOG.info("Stopping PTB app...")
     await app.stop()
     await app.shutdown()
 
-    worker_a.stop()
-    worker_b.stop()
-    worker_c.stop()
-    await asyncio.sleep(0.5)  # workers cancel gracefully
+    # Cancel webhook task
+    webhook_task.cancel()
+    try:
+        await webhook_task
+    except asyncio.CancelledError:
+        LOG.info("Webhook task cancelled.")
 
     LOG.info("Shutdown complete.")
 
@@ -109,3 +134,4 @@ if __name__ == "__main__":
         asyncio.run(async_main())
     except RuntimeError as e:
         logging.getLogger("main").error("Event loop error: %s", e)
+        
