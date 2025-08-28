@@ -1,8 +1,9 @@
 # main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
+import os #webhook+keep_alive yapisi için olmali
 import asyncio
 import signal
 import logging
-from telegram.ext import ApplicationBuilder
+from telegram.ext import ApplicationBuilder, CommandHandler
 
 from keep_alive import keep_alive
 from utils.db import init_db
@@ -19,11 +20,17 @@ configure_logging(logging.INFO)
 LOG = logging.getLogger("main")
 
 # -------------------------------
+# Basit /start handler (os.getenv() tabanlı kullanım için)
+async def start(update, context):
+    await update.message.reply_text("Bot çalışıyor 🚀")
+
+# -------------------------------
 async def async_main():
     LOG.info("Booting bot...")
     init_db()
 
-    token = CONFIG.TELEGRAM.BOT_TOKEN
+    # Token artık CONFIG veya .env ile okunabilir
+    token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         LOG.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
         return
@@ -31,9 +38,13 @@ async def async_main():
     # PTB app
     app = ApplicationBuilder().token(token).build()
 
-    # Keep-alive webserver (Render ping)
+    # -------------------------------
+    # Keep-alive servisi (Render uyumlu)
     keep_alive()
     load_handlers(app)
+
+    # Start /start handler ekle
+    app.add_handler(CommandHandler("start", start))
 
     loop = asyncio.get_running_loop()
     kline_queue = asyncio.Queue()
@@ -72,13 +83,13 @@ async def async_main():
     await app.initialize()
     await app.start()
 
-    webhook_url = f"{CONFIG.WEBHOOK_URL}/{token}"
+    webhook_url = os.getenv("WEBHOOK_URL", f"{CONFIG.WEBHOOK_URL}/{token}")
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
     await app.run_webhook(
         listen="0.0.0.0",
-        port=CONFIG.PORT,
+        port=int(os.getenv("PORT", CONFIG.PORT)),
         webhook_url=webhook_url,
         stop_signals=None,  # biz kendimiz stop_event ile kontrol ediyoruz
     )
