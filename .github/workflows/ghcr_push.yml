@@ -5,29 +5,42 @@
 '''
 
 
-name: Build and Push Docker Image
+name: Build, Push to GHCR & Deploy to Render
 
 on:
   push:
-    branches: [ main ]  # main branch’e push olduğunda çalışacak
+    branches: [ main ]  # main branch'e push olduğunda tetiklenecek
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      # 1️⃣ Repo’yu al
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Log in to GHCR
-      uses: docker/login-action@v2
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GHCR_TOKEN }}  # classic token'ı GitHub Secrets'a ekle
+      # 2️⃣ GHCR’ye login
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        push: true
-        tags: ghcr.io/dort5bot/wobot1:latest
+      # 3️⃣ Docker image build ve push
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ghcr.io/YOUR_USERNAME/wobot1:latest
+
+      # 4️⃣ Render deploy
+      - name: Deploy to Render
+        uses: render-examples/deploy-docker-image-action@v1
+        with:
+          api_key: ${{ secrets.RENDER_API_KEY }}
+          service_id: ${{ secrets.RENDER_SERVICE_ID }}
+          image: ghcr.io/YOUR_USERNAME/wobot1:latest
+          tag: latest
+
