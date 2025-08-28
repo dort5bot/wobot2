@@ -17,7 +17,8 @@ import asyncio
 import signal
 from contextlib import suppress
 
-from telegram.ext import ApplicationBuilder, Update
+from telegram import Update
+from telegram.ext import ApplicationBuilder
 
 from utils.db import init_db
 from utils.monitoring import configure_logging
