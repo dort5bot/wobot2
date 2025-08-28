@@ -1,4 +1,6 @@
 # main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
+# CONFIG’e dokunmadan .env üzerinden hem port hem keepalive URL alir
+
 import asyncio
 import signal
 import logging
@@ -69,15 +71,17 @@ async def async_main():
 
     # -------------------------------
     # Webhook setup (instead of polling)
+    # ⚡ .env’den keepalive URL ve port alıyoruz
     # -------------------------------
     await app.initialize()
     await app.start()
 
-    # ⚡ .env’den webhook URL al
     keepalive_url = os.getenv("KEEPALIVE_URL")
     if not keepalive_url:
         LOG.error("KEEPALIVE_URL is not set in .env")
         return
+
+    port = int(os.getenv("PORT", 8000))  # ⚡ .env’den port al, default 8000
 
     webhook_url = f"{keepalive_url}/{token}"
     await app.bot.set_webhook(webhook_url)
@@ -85,12 +89,12 @@ async def async_main():
 
     await app.run_webhook(
         listen="0.0.0.0",
-        port=CONFIG.PORT,
+        port=port,
         webhook_url=webhook_url,
         stop_signals=None,  # biz kendimiz stop_event ile kontrol ediyoruz
     )
-    # -------------------------------
 
+    # -------------------------------
     await stop_event.wait()
 
     LOG.info("Shutting down...")
