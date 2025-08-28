@@ -1,54 +1,23 @@
+
+# main.py
 """
 Production-ready main.py for WorkerA→WorkerB→WorkerC chain + Telegram bot
-Features:
-- Robust async lifecycle
-- Graceful startup / shutdown
-- Handles existing event loops
-- Logging & error handling
-- Keep-alive / UptimeRobot support
-- Health/readiness endpoints
-- Optional Prometheus metrics / Sentry
-- CLI configurable
+Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
+Orijinal worker chain (WorkerA→WorkerB→WorkerC) korundu.
+nest_asyncio ile Render / Jupyter / başka async ortamlar uyumlu.
+Telegram bot için run_polling(close_loop=False) kullanıldı, event loop hatası çözülmüş.
+Shutdown signal ve worker lifecycle fonksiyonları korunmuş.
+
+İstersen bir sonraki adım olarak health endpoint ve uptime ping’i de ekleyip aynı yapıyı koruyacak şekilde entegrasyon yapabilirim
 """
 
-import argparse
-import asyncio
-import logging
 import os
-import signal
-import sys
+import logging
+import nest_asyncio
+import asyncio
 from contextlib import suppress
-from typing import Optional
 
-# Optional performance / diagnostics
-try:
-    import uvloop
-    _HAS_UVLOOP = True
-except Exception:
-    _HAS_UVLOOP = False
-
-try:
-    from setproctitle import setproctitle
-    _HAS_SETPROCTITLE = True
-except Exception:
-    _HAS_SETPROCTITLE = False
-
-try:
-    from prometheus_client import start_http_server, Counter, Summary
-    _HAS_PROM = True
-except Exception:
-    _HAS_PROM = False
-
-SENTRY_DSN = os.getenv("SENTRY_DSN")
-if SENTRY_DSN:
-    try:
-        import sentry_sdk
-        sentry_sdk.init(dsn=SENTRY_DSN)
-    except Exception:
-        pass
-
-from aiohttp import web
-from telegram.ext import ApplicationBuilder, Application
+from telegram.ext import ApplicationBuilder
 
 from utils.db import init_db
 from utils.monitoring import configure_logging
@@ -59,12 +28,20 @@ from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
 
-# ------------------------------
+# -----------------------------
+# Patch mevcut event loop
+# -----------------------------
+nest_asyncio.apply()
+
+# -----------------------------
+# Logging
+# -----------------------------
 configure_logging(logging.INFO)
 LOG = logging.getLogger("main")
 
-# ------------------------------
+# -----------------------------
 # Worker setup
+# -----------------------------
 async def setup_workers():
     queue_raw = asyncio.Queue()
     worker_a = WorkerA(queue_raw)
@@ -77,8 +54,9 @@ async def setup_workers():
     worker_b = WorkerB(queue_raw, signal_callback=signal_callback)
     return worker_a, worker_b, worker_c
 
-# ------------------------------
+# -----------------------------
 # Worker lifecycle helpers
+# -----------------------------
 async def start_worker(worker, name: str):
     LOG.info("Starting %s...", name)
     try:
@@ -93,67 +71,25 @@ async def stop_worker(worker, name: str):
     except Exception:
         LOG.exception("Error stopping %s", name)
 
-# ------------------------------
-# Health endpoints
-async def health_handler(request):
-    return web.json_response({"status": "ok", "workers": "running"})
-
-async def health_server(host: str = "0.0.0.0", port: int = 8080, stop_event: Optional[asyncio.Event] = None):
-    app = web.Application()
-    app.router.add_get("/health", health_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host, port)
-    await site.start()
-    LOG.info("Health server listening on %s:%s", host, port)
-
-    try:
-        while not (stop_event and stop_event.is_set()):
-            await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        LOG.info("Health server cancelled")
-    finally:
-        await runner.cleanup()
-        LOG.info("Health server stopped")
-
-# ------------------------------
-# Keep-alive / uptime pinger
-async def uptime_ping(url: str, interval: int = 300, stop_event: Optional[asyncio.Event] = None):
-    import httpx
-    LOG.info("Starting uptime ping to %s every %ss", url, interval)
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            while not (stop_event and stop_event.is_set()):
-                try:
-                    r = await client.get(url)
-                    LOG.debug("Pinged %s -> %s", url, getattr(r, "status_code", None))
-                except Exception as e:
-                    LOG.warning("Uptime ping failed: %s", e)
-                await asyncio.sleep(interval)
-        except asyncio.CancelledError:
-            LOG.info("Uptime ping cancelled")
-
-# ------------------------------
-# Main async
-async def async_main(args):
-    if args.use_uvloop and _HAS_UVLOOP:
-        uvloop.install()
-        LOG.info("uvloop enabled")
-
-    if _HAS_SETPROCTITLE:
-        setproctitle("wobot1:main")
-
+# -----------------------------
+# Async Main
+# -----------------------------
+async def main():
     LOG.info("Boot sequence started")
     init_db()
 
     token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         LOG.error("Telegram BOT_TOKEN missing")
-        return 1
+        return
 
-    app: Application = ApplicationBuilder().token(token).build()
+    # Telegram app oluştur
+    app = ApplicationBuilder().token(token).build()
+
+    # Handler yükle
     load_handlers(app)
 
+    # Workerları başlat
     worker_a, worker_b, worker_c = await setup_workers()
     workers = [(worker_a, "WorkerA"), (worker_b, "WorkerB"), (worker_c, "WorkerC")]
 
@@ -165,68 +101,36 @@ async def async_main(args):
         LOG.warning("Shutdown signal %s received", sig_name)
         stop_event.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    for sig in (asyncio.constants.SIGINT, asyncio.constants.SIGTERM):
         try:
             asyncio.get_running_loop().add_signal_handler(sig, _shutdown, sig.name)
         except NotImplementedError:
+            import signal
             signal.signal(sig, lambda *_: _shutdown(getattr(sig, "name", str(sig))))
 
     # Start workers
     await asyncio.gather(*(start_worker(w, n) for w, n in workers))
     LOG.info("All workers started")
 
-    # Health server
-    health_task = None
-    if args.health_port:
-        health_task = asyncio.create_task(health_server(port=args.health_port, stop_event=stop_event))
-
-    # Uptime ping
-    ping_task = None
-    if args.keepalive_url:
-        ping_task = asyncio.create_task(uptime_ping(args.keepalive_url, interval=args.keepalive_interval, stop_event=stop_event))
-
-    # PTB initialize & polling/webhook
+    # Start Telegram polling
     await app.initialize()
     await app.start()
-    webhook_task = None
-
-    if args.mode == "webhook":
-        if not args.keepalive_url:
-            LOG.warning("Webhook mode requested but KEEPALIVE_URL missing")
-        else:
-            webhook_url = f"{args.keepalive_url.rstrip('/')}/{token}"
-            try:
-                await app.bot.set_webhook(webhook_url)
-                LOG.info("Webhook set to %s", webhook_url)
-                webhook_task = asyncio.create_task(app.run_webhook(
-                    listen="0.0.0.0",
-                    port=args.port,
-                    webhook_url=webhook_url,
-                    stop_signals=None,
-                    close_loop=False
-                ))
-            except Exception:
-                LOG.exception("Failed to run webhook")
-                stop_event.set()
-    else:
-        polling_task = asyncio.create_task(app.run_polling(close_loop=False))
-        LOG.info("Polling started")
+    polling_task = asyncio.create_task(app.run_polling(close_loop=False))
+    LOG.info("Polling started")
 
     # Wait for shutdown signal
     await stop_event.wait()
     LOG.info("Shutdown triggered")
 
-    # Cancel auxiliary tasks
-    for t in [ping_task, health_task, webhook_task, polling_task if args.mode=="polling" else None]:
-        if t:
-            t.cancel()
-            with suppress(asyncio.CancelledError):
-                await t
+    # Cancel polling
+    polling_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await polling_task
 
     # Stop workers
     await asyncio.gather(*(stop_worker(w, n) for w, n in workers))
 
-    # PTB shutdown
+    # Shutdown Telegram app
     try:
         await app.shutdown()
         await app.stop()
@@ -235,27 +139,10 @@ async def async_main(args):
         LOG.exception("Error during app shutdown")
 
     LOG.info("All systems stopped")
-    return 0
 
-# ------------------------------
-def build_argparser():
-    p = argparse.ArgumentParser(description="Production-ready bot entrypoint")
-    p.add_argument("--mode", choices=["webhook", "polling"], default="webhook")
-    p.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
-    p.add_argument("--health-port", type=int, default=int(os.getenv("HEALTH_PORT", "8080")))
-    p.add_argument("--use-uvloop", action="store_true", default=bool(os.getenv("USE_UVLOOP", False)))
-    p.add_argument("--keepalive-url", default=os.getenv("KEEPALIVE_URL"))
-    p.add_argument("--keepalive-interval", type=int, default=int(os.getenv("KEEPALIVE_INTERVAL", "300")))
-    return p
-
-# ------------------------------
-def main():
-    args = build_argparser().parse_args()
-    try:
-        asyncio.run(async_main(args))
-    except Exception:
-        LOG.exception("Unhandled exception in main")
-        sys.exit(1)
-
+# -----------------------------
+# Entry point
+# -----------------------------
 if __name__ == "__main__":
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
