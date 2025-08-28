@@ -87,11 +87,13 @@ async def async_main():
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
+    # close_loop=False ⚡ Render uyumlu
     await app.run_webhook(
         listen="0.0.0.0",
         port=port,
         webhook_url=webhook_url,
-        stop_signals=None,  # biz kendimiz stop_event ile kontrol ediyoruz
+        stop_signals=None,
+        close_loop=False
     )
 
     # -------------------------------
@@ -111,4 +113,9 @@ async def async_main():
 
 # -------------------------------
 if __name__ == "__main__":
-    asyncio.run(async_main())
+    try:
+        # ⚡ Render / mevcut loop uyumlu
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(async_main())
+    except RuntimeError as e:
+        LOG.error("Event loop error: %s", e)
