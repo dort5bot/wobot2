@@ -1,4 +1,4 @@
-# main.py
+#main.py
 import asyncio
 import logging
 import os
@@ -19,12 +19,18 @@ from jobs.worker_c import WorkerC
 LOG = logging.getLogger(__name__)
 
 # --- Keep-alive ---
-async def handle_root(request): return web.Response(text="ok")
-async def handle_health(request): return web.json_response({"status": "ok"})
+async def handle_root(request): 
+    return web.Response(text="ok")
+
+async def handle_health(request): 
+    return web.json_response({"status": "ok"})
 
 async def start_web():
     app = web.Application()
-    app.add_routes([web.get("/", handle_root), web.get("/health", handle_health)])
+    app.add_routes([
+        web.get("/", handle_root),
+        web.get("/health", handle_health)
+    ])
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
@@ -32,7 +38,6 @@ async def start_web():
     await site.start()
     LOG.info("Keep-alive running on :%s", port)
     return runner
-
 
 # --- Pipeline ---
 class Pipeline:
@@ -59,9 +64,8 @@ class Pipeline:
 
         if self.application:
             LOG.info("Polling started (Render free + UptimeRobot)")
-            # run_polling bloklayıcı → async loop’u bozmasın diye executor’da çalıştırıyoruz
-            loop = asyncio.get_running_loop()
-            loop.run_in_executor(None, self.application.run_polling, {"close_loop": False})
+            await self.application.initialize()
+            await self.application.start()
 
     async def stop(self):
         await self.worker_a.stop_async()
@@ -69,9 +73,9 @@ class Pipeline:
         await self.worker_c.stop_async()
         if self.application:
             with suppress(Exception):
+                await self.application.stop()
                 await self.application.shutdown()
         LOG.info("Bot stopped")
-
 
 # --- Main ---
 async def main():
@@ -94,8 +98,5 @@ async def main():
     await pipe.stop()
     await runner.cleanup()
 
-
 if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()
     asyncio.run(main())
