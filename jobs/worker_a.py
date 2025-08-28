@@ -1,21 +1,22 @@
 # jobs/worker_a.py
-# veri toplayıcı Queue
-# Worker A: ticker ve funding verilerini cache’e koyar (async)
-# Config üzerinden interval ve sembol listesi kontrolü
 import asyncio
 import logging
 from utils.config import CONFIG
-from utils.stream_manager import StreamManager
-from utils.binance_api import BinanceClient
+from utils.binance_api import get_binance_api
 
 LOG = logging.getLogger("worker_a")
 
+
 class WorkerA:
+    """
+    Worker A: Binance'den veri toplayıcı
+    - Kline streamlerini queue'ya aktarır
+    - Funding rate verilerini periyodik olarak alır ve queue'ya koyar
+    """
     def __init__(self, queue: asyncio.Queue, loop=None):
         self.queue = queue
         self.loop = loop or asyncio.get_event_loop()
-        self.client = BinanceClient()
-        self.stream_mgr = StreamManager(self.client, loop=self.loop)
+        self.client = get_binance_api()
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
@@ -24,27 +25,33 @@ class WorkerA:
             return
         self._running = True
 
-        streams = [f"{s.lower()}@kline_{CONFIG.BINANCE.STREAM_INTERVAL}" 
-                   for s in CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO]
-
-        # Stream başlat
-        self.stream_mgr.start_combined_groups(streams, self.bridge)
-        LOG.info("WorkerA started: %s", streams)
+        # Kline stream'leri başlat
+        for symbol in CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO:
+            task = self.loop.create_task(
+                self.client.ws_kline(symbol.lower(), CONFIG.BINANCE.STREAM_INTERVAL, self.bridge),
+                name=f"ws_kline_{symbol}"
+            )
+            self._tasks.append(task)
 
         # Funding poller
-        async def funding_loop():
-            while self._running:
-                try:
-                    data = await self.client.get_funding_rates(CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO)
-                    await self.queue.put({"funding": data})
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    LOG.exception("WorkerA funding poll error")
-                await asyncio.sleep(60)
-
-        task = asyncio.create_task(funding_loop(), name="worker_a_funding")
+        task = self.loop.create_task(self._funding_loop(), name="funding_poller")
         self._tasks.append(task)
+
+        LOG.info("WorkerA started with symbols: %s", CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO)
+
+    async def _funding_loop(self):
+        while self._running:
+            try:
+                data = {}
+                for symbol in CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO:
+                    fr = await self.client.get_funding_rate(symbol)
+                    data[symbol] = fr
+                await self.queue.put({"funding": data})
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOG.exception("WorkerA funding poll error")
+            await asyncio.sleep(CONFIG.BINANCE.FUNDING_POLL_INTERVAL)
 
     async def bridge(self, msg):
         """Stream mesajlarını queue'ya aktarır"""
@@ -57,7 +64,7 @@ class WorkerA:
         if not self._running:
             return
         self._running = False
-        self.stream_mgr.cancel_all()
+
         for t in self._tasks:
             t.cancel()
             try:
@@ -66,3 +73,16 @@ class WorkerA:
                 pass
         self._tasks.clear()
         LOG.info("WorkerA stopped")
+
+
+# -------------------------------------------------------------
+# BinanceClient içine eklenecek WebSocket helper
+# -------------------------------------------------------------
+async def ws_kline(self, symbol: str, interval: str, callback):
+    """
+    Kline stream'i başlatır ve gelen verileri callback ile iletir
+    """
+    url = f"wss://stream.binance.com:9443/ws/{symbol}@kline_{interval}"
+    await self.ws_subscribe(url, callback)
+
+
