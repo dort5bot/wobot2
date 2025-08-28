@@ -1,47 +1,22 @@
-# main.py
+##🟩🟩🟩
+main.py özellikleri
+# Async + Worker tabanlı bot giriş noktası
+# - Python 3.11, python-telegram-bot v20+
+Async + Worker tabanlı
+# - WorkerA (Binance stream + funding) → WorkerB (sinyal üretimi) → WorkerC (işlem yöneticisi)
+- Uyku önleme: 
+# - Free Render uyumlu: Aiohttp keep-alive endpoint + opsiyonel self-ping
+# - Otomatik handler yükleme: handler_loader.load_handlers(application)
+Kod içinde açıklama satırları mevcut
+kararlı, hızlı, veri alma+kararverme+trade destekleme
 
-🟩
-Webhook + KeepAlive (önerilen)
-Render dyno’ları 30 dk boşta kalınca uyuyor → sadece polling kullansan bot kapanır.
-O yüzden:
-Webhook ile çalıştır (Telegram mesajları doğrudan Render URL’ine gelir).
-keep_alive() ile / veya /ping endpoint aç → UptimeRobot vs. her 5 dakikada bir GET isteği atsın. Böylece dyno uyanık kalır.
-✅ Avantaj:
-Render’ın doğal ortamına uygun.
-Çok daha stabil, polling’e göre daha az hata.
-Free Render için Webhook + KeepAlive + UptimeRobot ping modelini öneririm.
-WEBHOOK_URL = https://seninbot.onrender.com/<token> (Telegram için)
-KEEPALIVE_URL = https://seninbot.onrender.com/ (UptimeRobot GET için
+----------------------------------
+utils/db.py
+utils/monitoring.py
+utils/handler_loader.py
+utils/config.py
 
-🟥
-
-
-
-# Render / Heroku / Docker friendly Telegram bot orchestrator (PTB v20+)
-# run_polling() ile async task olarak çalışir
-# - Async lifecycle: asyncio.run(async_main())
-# - PTB Application properly initialized & started before polling
-# - Workers (A & B) run in separate asyncio tasks and are cleanly cancelled on shutdown
-# - Keep-alive web server (aiohttp) for platform health checks
-# - Robust graceful shutdown on SIGINT/SIGTERM (and Windows fallback)
-# - Improved logging + defensive error handling
-#
-# Nasıl çalışır (özeti):
-# 1. Application oluşturulur (ApplicationBuilder).
-# 2. Handlers yüklenir (utils.handler_loader.load_handlers).
-# 3. Workers başlatılır (jobs.worker_a.run_forever, jobs.worker_b.run_forever).
-# 4. Web server (aiohttp) başlatılır.
-# 5. PTB lifecycle: initialize() -> start() -> polling görevini ayrı Task olarak çalıştır.
-# 6. SIGINT/SIGTERM alınca: workers ve polling task güvenli şekilde iptal edilir, ardından app.stop/shutdown/cleanup çalıştırılır.
-#
-# Notlar / Önemli:
-# * PTB v20+ ile "start" çağrılmadan önce initialize() çağrılmazsa yukarıdaki RuntimeError alınır.
-# * Polling uzun süreli (blocking) coroutine olabilir; bu yüzden ayrı task olarak çalıştırıyoruz.
-# * `shutdown()` içinde loop.stop() çağırmıyoruz — asyncio.run flow'una bırakıyoruz.
-# * Worker'ların kendi içinde exception handle etmesi önerilir; burada genel cancel & gather yapıyoruz.
-#
-# Geliştirmek için:
-# - Yeni worker eklemek için start_worker_coros listesine run_coroutine ekle.
-# - metrics / prometheus endpoint ekle (web server'e).
-# - health/readiness endpointleri genişlet.
-
+jobs/worker_a.py
+jobs/worker_ba.py
+jobs/worker_c.py
+---------
