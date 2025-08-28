@@ -1,0 +1,41 @@
+#/workflows/deploy.yml
+
+name: Build & Push to GHCR
+
+on:
+  push:
+    branches:
+      - main  # veya hangi branch üzerinde çalışıyorsan
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # 1) Repo’yu çek
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2) GHCR login
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3) Docker image build
+      - name: Build Docker image
+        run: docker build -t ghcr.io/${{ github.repository_owner }}/wobot1:latest .
+
+      # 4) Docker image push
+      - name: Push Docker image
+        run: docker push ghcr.io/${{ github.repository_owner }}/wobot1:latest
+
+      # 5) Render Deploy Hook tetikle
+      - name: Trigger Render Deploy
+        run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
