@@ -1,5 +1,4 @@
-#alarm_handler.py
-
+# handlers/alarm_handler.py
 
 import logging
 from telegram import Update
@@ -7,15 +6,14 @@ from telegram.ext import CommandHandler, ContextTypes
 
 from utils.apikey_utils import (
     add_alarm,
-    get_user_alarms,
-    delete_alarm,       # düzeltildi
+    get_alarms,
+    delete_alarm,
     cleanup_old_alarms
 )
 from utils.monitoring import telegram_alert
 
 LOG = logging.getLogger("alarm_handler")
 LOG.addHandler(logging.NullHandler())
-
 
 # ---------------- ALARM İŞLEMLERİ ---------------- #
 def create_alarm(user_id: int, alarm_type: str, value: str):
@@ -28,19 +26,22 @@ def create_alarm(user_id: int, alarm_type: str, value: str):
 def trigger_alarm(user_id: int, alarm_id: int, message: str):
     """Alarm tetikler ve siler"""
     telegram_alert(f"🚨 Alarm Tetiklendi!\n\n{message}")
-    delete_alarm(alarm_id)  # düzeltildi
+    delete_alarm(alarm_id)
     LOG.info(f"Alarm tetiklendi ve silindi | user_id={user_id}, alarm_id={alarm_id}")
 
 
 def list_alarms(user_id: int):
     """Mevcut alarmları listeler"""
-    alarms = get_user_alarms(user_id)
+    alarms = get_alarms(user_id)
     if not alarms:
         telegram_alert("ℹ️ Henüz kayıtlı alarmınız yok.")
         return
     msg_lines = ["📋 Mevcut Alarmlar:"]
-    for alarm_id, alarm_type, value, created_at in alarms:
-        msg_lines.append(f"#{alarm_id} | {alarm_type} = {value} | ⏱ {created_at}")
+    for a in alarms:
+        alarm_id = a["id"]
+        alarm_type = a["data"].get("type", "")
+        value = a["data"].get("value", "")
+        msg_lines.append(f"#{alarm_id} | {alarm_type} = {value}")
     telegram_alert("\n".join(msg_lines))
 
 
@@ -73,16 +74,22 @@ async def _cmd_alarm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             alarm_type = args[1]
             value = args[2]
             create_alarm(user_id, alarm_type, value)
+            try:
+                await update.message.delete()
+            except: pass
             await update.message.reply_text(f"✅ Alarm eklendi: {alarm_type} = {value}")
 
         elif action == "list":
-            alarms = get_user_alarms(user_id)
+            alarms = get_alarms(user_id)
             if not alarms:
                 await update.message.reply_text("ℹ️ Henüz kayıtlı alarmınız yok.")
                 return
             msg_lines = ["📋 Mevcut Alarmlar:"]
-            for alarm_id, alarm_type, value, created_at in alarms:
-                msg_lines.append(f"#{alarm_id} | {alarm_type} = {value} | ⏱ {created_at}")
+            for a in alarms:
+                alarm_id = a["id"]
+                alarm_type = a["data"].get("type", "")
+                value = a["data"].get("value", "")
+                msg_lines.append(f"#{alarm_id} | {alarm_type} = {value}")
             await update.message.reply_text("\n".join(msg_lines))
 
         elif action == "clean":
