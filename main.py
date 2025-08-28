@@ -2,13 +2,14 @@
 import asyncio
 import signal
 import logging
+import os
 from telegram.ext import ApplicationBuilder
 
 from keep_alive import keep_alive
 from utils.db import init_db
 from utils.monitoring import configure_logging
-from utils.config import CONFIG
 from utils.handler_loader import load_handlers
+from utils.config import CONFIG
 
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
@@ -72,7 +73,13 @@ async def async_main():
     await app.initialize()
     await app.start()
 
-    webhook_url = f"{CONFIG.WEBHOOK_URL}/{token}"
+    # ⚡ .env’den webhook URL al
+    keepalive_url = os.getenv("KEEPALIVE_URL")
+    if not keepalive_url:
+        LOG.error("KEEPALIVE_URL is not set in .env")
+        return
+
+    webhook_url = f"{keepalive_url}/{token}"
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
