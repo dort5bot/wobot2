@@ -1,5 +1,5 @@
 # main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
-import os  # webhook+keep_alive yapisi için
+import os
 import asyncio
 import signal
 import logging
@@ -20,7 +20,6 @@ configure_logging(logging.INFO)
 LOG = logging.getLogger("main")
 
 # -------------------------------
-# Basit /start handler (os.getenv() tabanlı kullanım için)
 async def start(update, context):
     await update.message.reply_text("Bot çalışıyor 🚀")
 
@@ -29,44 +28,29 @@ async def async_main():
     LOG.info("Booting bot...")
     init_db()
 
-    # Token artık CONFIG veya .env ile okunabilir
     token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         LOG.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
         return
 
-    # PTB app
     app = ApplicationBuilder().token(token).build()
-
-    # -------------------------------
-    # Keep-alive servisi (Render uyumlu)
     keep_alive()
     load_handlers(app)
-
-    # Start /start handler ekle
     app.add_handler(CommandHandler("start", start))
 
     loop = asyncio.get_running_loop()
     kline_queue = asyncio.Queue()
 
-    # Workers
     worker_a = WorkerA(kline_queue, loop=loop)
     worker_c = WorkerC()
-
     from handlers import signal_handler
-    worker_b = WorkerB(
-        queue=kline_queue,
-        signal_callback=signal_handler.publish_signal
-    )
+    worker_b = WorkerB(queue=kline_queue, signal_callback=signal_handler.publish_signal)
 
-    # Start workers
     worker_a.start()
     worker_b.start()
     worker_c.start()
 
-    # Graceful shutdown event
     stop_event = asyncio.Event()
-
     def _request_shutdown(signame: str):
         LOG.warning("Signal %s received, shutting down...", signame)
         stop_event.set()
@@ -78,39 +62,43 @@ async def async_main():
             signal.signal(sig, lambda *_: _request_shutdown(sig.name))
 
     # -------------------------------
-    # Webhook setup (instead of polling)
+    # Webhook setup (Render uyumlu)
     # -------------------------------
     await app.initialize()
     await app.start()
-
     webhook_url = os.getenv("WEBHOOK_URL", f"https://your-default-url.com/{token}")
     port = int(os.getenv("PORT", 8080))
-
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
-    await app.run_webhook(
+    # run_webhook yerine app.updater.start_webhook kullan
+    await app.updater.start_webhook(
         listen="0.0.0.0",
         port=port,
+        url_path=token,
         webhook_url=webhook_url,
-        stop_signals=None,  # biz kendimiz stop_event ile kontrol ediyoruz
+        stop_signals=None
     )
-    # -------------------------------
 
     await stop_event.wait()
 
     LOG.info("Shutting down...")
-
+    await app.updater.stop()
     await app.stop()
     await app.shutdown()
 
     worker_a.stop()
     worker_b.stop()
     worker_c.stop()
-    await asyncio.sleep(0.5)  # workers cancel gracefully
+    await asyncio.sleep(0.5)
 
     LOG.info("Shutdown complete.")
 
 # -------------------------------
 if __name__ == "__main__":
-    asyncio.run(async_main())
+    # Mevcut event loop varsa kullan
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(async_main())
+    except RuntimeError:  # loop zaten çalışıyorsa
+        asyncio.create_task(async_main())
