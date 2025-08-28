@@ -1,4 +1,6 @@
 # src/utils/encryption_utils.py
+# apikey şifreleme için 
+
 from cryptography.fernet import Fernet
 
 KEY = b"your-fernet-key-here"  # bunu güvenli şekilde saklayın
