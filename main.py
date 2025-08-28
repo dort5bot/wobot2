@@ -1,19 +1,18 @@
 # main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
-# CONFIG’e dokunmadan .env üzerinden hem port hem keepalive URL alir
-# flasksiz, sadece webhook ve keepalive kullanılıyor.
+# main.py — PTB v20+ Trading Bot Entrypoint (Prod-ready, Worker A/B/C, Webhook Mode)
+# CONFIG’e dokunmadan .env üzerinden port ve keepalive URL alır
+# Flask gerekmiyor, sadece webhook ve UptimeRobot ping ile keep-alive
 
 import asyncio
-import signal
 import logging
 import os
+import signal
 from telegram.ext import ApplicationBuilder
 
-from keep_alive import keep_alive
 from utils.db import init_db
 from utils.monitoring import configure_logging
 from utils.handler_loader import load_handlers
 from utils.config import CONFIG
-
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
@@ -21,6 +20,22 @@ from jobs.worker_c import WorkerC
 # -------------------------------
 configure_logging(logging.INFO)
 LOG = logging.getLogger("main")
+
+# -------------------------------
+async def uptime_ping_task(url: str, interval: int = 300):
+    """
+    UptimeRobot ping simülasyonu için async task.
+    interval: saniye
+    """
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        while True:
+            try:
+                r = await client.get(url)
+                LOG.debug("Pinged Uptime URL, status=%s", r.status_code)
+            except Exception as e:
+                LOG.warning("Uptime ping failed: %s", e)
+            await asyncio.sleep(interval)
 
 # -------------------------------
 async def async_main():
@@ -35,9 +50,6 @@ async def async_main():
     # PTB app
     app = ApplicationBuilder().token(token).build()
 
-    # Keep-alive webserver (Render ping)
-    keep_alive()
-
     # Load handlers
     load_handlers(app)
 
@@ -47,18 +59,10 @@ async def async_main():
     # Workers
     worker_a = WorkerA(kline_queue)
     worker_c = WorkerC()
-
     from handlers import signal_handler
     worker_b = WorkerB(queue=kline_queue, signal_callback=signal_handler.publish_signal)
 
-    # Start workers
-    LOG.info("Starting WorkerA...")
-    worker_a.start()
-    LOG.info("Starting WorkerB...")
-    worker_b.start()
-    LOG.info("Starting WorkerC...")
-    worker_c.start()
-
+    # -------------------------------
     # Graceful shutdown event
     stop_event = asyncio.Event()
 
@@ -73,6 +77,21 @@ async def async_main():
             signal.signal(sig, lambda *_: _request_shutdown(sig.name))
 
     # -------------------------------
+    # Start workers as tasks
+    async def start_worker(worker, name):
+        try:
+            LOG.info("Starting %s...", name)
+            await worker.start_async()
+        except Exception as e:
+            LOG.exception("%s failed to start: %s", name, e)
+
+    worker_tasks = [
+        asyncio.create_task(start_worker(worker_a, "WorkerA")),
+        asyncio.create_task(start_worker(worker_b, "WorkerB")),
+        asyncio.create_task(start_worker(worker_c, "WorkerC")),
+    ]
+
+    # -------------------------------
     # Webhook setup
     keepalive_url = os.getenv("KEEPALIVE_URL")
     if not keepalive_url:
@@ -82,14 +101,19 @@ async def async_main():
     port = int(os.getenv("PORT", 8000))
     webhook_url = f"{keepalive_url}/{token}"
 
-    # PTB async başlatma
     LOG.info("Initializing PTB app...")
     await app.initialize()
     await app.start()
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
-    # run_webhook, Render uyumlu close_loop=False
+    # -------------------------------
+    # Start Uptime ping task (async)
+    ping_task = asyncio.create_task(uptime_ping_task(keepalive_url, interval=300))
+    LOG.info("Uptime ping task started (interval=300s)")
+
+    # -------------------------------
+    # Run PTB webhook
     LOG.info("Running webhook...")
     webhook_task = asyncio.create_task(
         app.run_webhook(
@@ -101,30 +125,39 @@ async def async_main():
         )
     )
 
-    # Stop-event bekleme
+    # Wait for shutdown signal
     await stop_event.wait()
     LOG.info("Stop event triggered. Shutting down...")
 
-    # Workers stop
-    LOG.info("Stopping WorkerA...")
-    worker_a.stop()
-    LOG.info("Stopping WorkerB...")
-    worker_b.stop()
-    LOG.info("Stopping WorkerC...")
-    worker_c.stop()
-    await asyncio.sleep(0.5)  # workers cancel gracefully
+    # -------------------------------
+    # Cancel workers
+    for worker in (worker_a, worker_b, worker_c):
+        try:
+            LOG.info("Stopping %s...", worker.__class__.__name__)
+            await worker.stop_async()
+        except Exception as e:
+            LOG.warning("Error stopping %s: %s", worker.__class__.__name__, e)
 
-    # PTB stop/shutdown
-    LOG.info("Stopping PTB app...")
-    await app.stop()
-    await app.shutdown()
+    for task in worker_tasks:
+        task.cancel()
 
-    # Cancel webhook task
+    # -------------------------------
+    # Cancel ping & webhook tasks
+    ping_task.cancel()
     webhook_task.cancel()
+    try:
+        await ping_task
+    except asyncio.CancelledError:
+        LOG.info("Ping task cancelled.")
     try:
         await webhook_task
     except asyncio.CancelledError:
         LOG.info("Webhook task cancelled.")
+
+    # PTB shutdown
+    LOG.info("Stopping PTB app...")
+    await app.stop()
+    await app.shutdown()
 
     LOG.info("Shutdown complete.")
 
@@ -133,5 +166,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(async_main())
     except RuntimeError as e:
-        logging.getLogger("main").error("Event loop error: %s", e)
-        
+        LOG.error("Event loop error: %s", e)
+
