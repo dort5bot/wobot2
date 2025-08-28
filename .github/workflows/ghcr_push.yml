@@ -33,7 +33,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ghcr.io/YOUR_USERNAME/wobot1:latest
+          tags: ghcr.io/dort5bot/wobot1:latest
 
       # 4️⃣ Render deploy
       - name: Deploy to Render
@@ -41,6 +41,6 @@ jobs:
         with:
           api_key: ${{ secrets.RENDER_API_KEY }}
           service_id: ${{ secrets.RENDER_SERVICE_ID }}
-          image: ghcr.io/YOUR_USERNAME/wobot1:latest
+          image: ghcr.io/dort5bot/wobot1:latest
           tag: latest
 
