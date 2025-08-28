@@ -1,26 +1,24 @@
-# keep_alive.py
-#self ping yok eklenebilir 
+# keep_alive.py — Basit Flask ping server (Render uyumlu)
 from flask import Flask
 import threading
-import logging
-
-LOG = logging.getLogger("keep_alive")
-LOG.addHandler(logging.NullHandler())
 
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
-    return "Bot is alive", 200
+    return "Bot is alive ✅"
+
+@app.route("/ping")
+def ping():
+    return "pong"
 
 def run():
-    LOG.info("Keep-alive web server started on port 8080")
-    app.run(host="0.0.0.0", port=8080)
+    # Render kendi PORT environment variable’ını set ediyor
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
-    """
-    Basit bir Flask server'ını ayrı bir thread'de çalıştırır.
-    asyncio ile uyumlu olması için parametre almaz.
-    """
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
+    t = threading.Thread(target=run)
+    t.daemon = True
+    t.start()
