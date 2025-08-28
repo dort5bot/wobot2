@@ -1,4 +1,22 @@
 # main.py
+
+🟩
+Webhook + KeepAlive (önerilen)
+Render dyno’ları 30 dk boşta kalınca uyuyor → sadece polling kullansan bot kapanır.
+O yüzden:
+Webhook ile çalıştır (Telegram mesajları doğrudan Render URL’ine gelir).
+keep_alive() ile / veya /ping endpoint aç → UptimeRobot vs. her 5 dakikada bir GET isteği atsın. Böylece dyno uyanık kalır.
+✅ Avantaj:
+Render’ın doğal ortamına uygun.
+Çok daha stabil, polling’e göre daha az hata.
+Free Render için Webhook + KeepAlive + UptimeRobot ping modelini öneririm.
+WEBHOOK_URL = https://seninbot.onrender.com/<token> (Telegram için)
+KEEPALIVE_URL = https://seninbot.onrender.com/ (UptimeRobot GET için
+
+🟥
+
+
+
 # Render / Heroku / Docker friendly Telegram bot orchestrator (PTB v20+)
 # run_polling() ile async task olarak çalışir
 # - Async lifecycle: asyncio.run(async_main())
