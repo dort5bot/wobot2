@@ -66,7 +66,9 @@ async def stop_worker(worker, name: str):
 # -----------------------------
 async def main():
     configure_logging()
-    await init_db()
+
+    # DB init (sync fonksiyon, await değil)
+    init_db()
 
     # Load handlers
     token = CONFIG["TELEGRAM"]["TOKEN"]
