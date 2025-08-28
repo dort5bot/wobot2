@@ -1,5 +1,5 @@
 # main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
-import os #webhook+keep_alive yapisi için olmali
+import os  # webhook+keep_alive yapisi için
 import asyncio
 import signal
 import logging
@@ -83,13 +83,15 @@ async def async_main():
     await app.initialize()
     await app.start()
 
-    webhook_url = os.getenv("WEBHOOK_URL", f"{CONFIG.WEBHOOK_URL}/{token}")
+    webhook_url = os.getenv("WEBHOOK_URL", f"https://your-default-url.com/{token}")
+    port = int(os.getenv("PORT", 8080))
+
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
     await app.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", CONFIG.PORT)),
+        port=port,
         webhook_url=webhook_url,
         stop_signals=None,  # biz kendimiz stop_event ile kontrol ediyoruz
     )
