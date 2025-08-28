@@ -248,19 +248,26 @@ def main():
     args = build_argparser().parse_args()
     rc = 1
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        rc = loop.run_until_complete(async_main(args))
-    except RuntimeError:
-        # fallback if loop already running
-        loop = asyncio.get_event_loop()
-        rc = loop.run_until_complete(async_main(args))
+        try:
+            # Eğer mevcut loop varsa onu kullan
+            loop = asyncio.get_running_loop()
+            LOG.info("Existing event loop detected, using it")
+            task = loop.create_task(async_main(args))
+            loop.run_until_complete(task)
+            rc = task.result()
+        except RuntimeError:
+            # Eğer loop yoksa yeni oluştur
+            LOG.info("No running loop detected, creating a new loop")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            rc = loop.run_until_complete(async_main(args))
     except Exception:
         LOG.exception("Unhandled exception in main")
     finally:
         try:
-            loop.stop()
-            loop.close()
+            if not loop.is_running():
+                loop.stop()
+                loop.close()
         except Exception:
             pass
     sys.exit(rc or 0)
