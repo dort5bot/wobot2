@@ -162,6 +162,17 @@ class BinanceClient:
         url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@depth{depth}@100ms"
         await self.ws_subscribe(url, callback)
 
+# 🟩<<< # jobs/worker_a.py  için >>> 
+    async def ws_kline(self, symbol: str, interval: str, callback):
+        """
+        Kline stream'i başlatır ve gelen verileri callback ile iletir
+        """
+        url = f"wss://stream.binance.com:9443/ws/{symbol}@kline_{interval}"
+        await self.ws_subscribe(url, callback)
+
+
+
+    
     # -------------------------------------------------------------
     # Temel + Pro Metrikler ve diğer metotlar...
     # -------------------------------------------------------------
