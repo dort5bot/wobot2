@@ -1,14 +1,8 @@
-
 # main.py
 """
 Production-ready main.py for WorkerA→WorkerB→WorkerC chain + Telegram bot
 Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
-Orijinal worker chain (WorkerA→WorkerB→WorkerC) korundu.
-nest_asyncio ile Render / Jupyter / başka async ortamlar uyumlu.
-Telegram bot için run_polling(close_loop=False) kullanıldı, event loop hatası çözülmüş.
-Shutdown signal ve worker lifecycle fonksiyonları korunmuş.
-
-İstersen bir sonraki adım olarak health endpoint ve uptime ping’i de ekleyip aynı yapıyı koruyacak şekilde entegrasyon yapabilirim
+Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
 """
 
 import os
@@ -16,6 +10,7 @@ import logging
 import nest_asyncio
 import asyncio
 from contextlib import suppress
+import signal
 
 from telegram.ext import ApplicationBuilder
 
@@ -95,18 +90,18 @@ async def main():
 
     stop_event = asyncio.Event()
 
-    # --------------------------
-    # Shutdown signal handler
-    def _shutdown(sig_name="UNKNOWN"):
-        LOG.warning("Shutdown signal %s received", sig_name)
+    # -----------------------------
+    # Signal callback (Linux/Windows uyumlu)
+    # -----------------------------
+    def _shutdown(sig=None):
+        LOG.warning("Shutdown signal %s received", getattr(sig, 'name', str(sig)))
         stop_event.set()
 
-    for sig in (asyncio.constants.SIGINT, asyncio.constants.SIGTERM):
+    for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            asyncio.get_running_loop().add_signal_handler(sig, _shutdown, sig.name)
+            asyncio.get_running_loop().add_signal_handler(sig, _shutdown, sig)
         except NotImplementedError:
-            import signal
-            signal.signal(sig, lambda *_: _shutdown(getattr(sig, "name", str(sig))))
+            signal.signal(sig, lambda *_: _shutdown(sig))
 
     # Start workers
     await asyncio.gather(*(start_worker(w, n) for w, n in workers))
