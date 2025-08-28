@@ -1,13 +1,13 @@
-# utils/encryption_utils.py
-# apikey şifreleme için
+# utils/encryption_utils.py — apikey şifreleme
+# FERNET_KEY artık .env’de zorun
+
 import os
 from cryptography.fernet import Fernet
 
-# .env'den FERNET_KEY al, yoksa otomatik oluştur
+# ⚡ FERNET_KEY artık .env’de zorunlu
 KEY = os.environ.get("FERNET_KEY")
 if not KEY:
-    KEY = Fernet.generate_key().decode()
-    print("FERNET_KEY env yok, otomatik oluşturuldu:", KEY)
+    raise RuntimeError("FERNET_KEY env variable is not set. Set it in Render dashboard.")
 
 fernet = Fernet(KEY.encode())  # string → bytes
 
