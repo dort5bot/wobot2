@@ -150,4 +150,4 @@ CONFIG = AppConfig()
 
 
 # ⚡ Webhook URL manuel .env üzerinden çekiliyor (Telegram Webhook için)
-CONFIG.WEBHOOK_URL = os.getenv("WEBHOOK_URL"
+CONFIG.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
