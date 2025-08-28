@@ -2,7 +2,6 @@
 # trade yönetici. ordermanager wrapper
 #
 
-
 import asyncio
 import logging
 from utils.order_manager import OrderManager
@@ -14,18 +13,27 @@ class WorkerC:
     def __init__(self):
         self.order_manager = OrderManager(paper_mode=CONFIG.BOT.PAPER_MODE)
         self.queue = asyncio.Queue()
-        self._task = None
+        self._task: asyncio.Task | None = None
         self._running = False
 
-    def start(self):
+    async def start_async(self):
+        if self._running:
+            return
         self._running = True
         self._task = asyncio.create_task(self._run(), name="worker_c")
         LOG.info("WorkerC started")
 
-    def stop(self):
+    async def stop_async(self):
+        if not self._running:
+            return
         self._running = False
         if self._task:
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        LOG.info("WorkerC stopped")
 
     async def send_decision(self, decision: dict):
         await self.queue.put(decision)
@@ -43,3 +51,4 @@ class WorkerC:
                     self.queue.task_done()
         except asyncio.CancelledError:
             LOG.info("WorkerC cancelled")
+
