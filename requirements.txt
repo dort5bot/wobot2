@@ -1,11 +1,12 @@
 #♦️requirements.txt
 aiohttp>=3.8.0
+cryptography>=41.0.0 #apikey şifreleme 
 httpx>=0.23.0
-websockets>=11.0.3
+flask
+nest_asyncio
+numpy>=1.24.0
+pandas>=2.0.0
 python-dotenv>=1.0.0
 python-telegram-bot>=20.0
 requests>=2.31.0
-flask
-numpy>=1.24.0
-pandas>=2.0.0
-cryptography>=41.0.0 #apikey şifreleme 
+websockets>=11.0.3
