@@ -117,14 +117,14 @@ async def main():
     # -----------------------------
     # Start Telegram polling (Render + UptimeRobot için)
     # -----------------------------
-    polling_task = asyncio.create_task(
-        app.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            close_loop=False
-        )
-    )
-    LOG.info("Polling started (webhook disabled)")
+LOG.info("Polling started (webhook disabled)")
+
+# Run polling directly (await), no need to create_task
+await app.run_polling(
+    drop_pending_updates=True,
+    allowed_updates=Update.ALL_TYPES,
+    close_loop=False
+)
 
     # Wait for shutdown signal
     await stop_event.wait()
