@@ -6,7 +6,6 @@ Production-ready main.py for Render free tier
 - CONFIG dataclass yapısına uyumlu
 """
 
-import os
 import logging
 import nest_asyncio
 import asyncio
@@ -39,15 +38,15 @@ stop_event = asyncio.Event()
 async def start_worker_async(worker, name: str):
     try:
         LOG.info(f"Starting {name}...")
-        await asyncio.to_thread(worker.start)
+        await worker.start_async()
     except Exception as e:
         LOG.exception(f"{name} crashed: {e}")
 
 
-async def stop_worker(worker, name: str):
+async def stop_worker_async(worker, name: str):
     try:
         LOG.info(f"Stopping {name}...")
-        await asyncio.to_thread(worker.stop)
+        await worker.stop_async()
         LOG.info(f"{name} stopped")
     except Exception as e:
         LOG.exception(f"Failed to stop {name}: {e}")
@@ -58,8 +57,6 @@ async def stop_worker(worker, name: str):
 # -----------------------------
 async def main():
     configure_logging()
-
-    # init_db async değil → direkt çağır
     init_db()
 
     # Load Telegram handlers
@@ -71,10 +68,15 @@ async def main():
     app = ApplicationBuilder().token(token).build()
     load_handlers(app)
 
+    # -----------------------------
+    # Queue oluştur
+    # -----------------------------
+    queue = asyncio.Queue()
+
     # Workers
-    worker_a = WorkerA()
-    worker_b = WorkerB()
-    worker_c = WorkerC()
+    worker_a = WorkerA(queue)
+    worker_b = WorkerB(queue)
+    worker_c = WorkerC(queue)
     workers = [
         (worker_a, "WorkerA"),
         (worker_b, "WorkerB"),
@@ -98,7 +100,7 @@ async def main():
     LOG.info("Shutdown triggered")
 
     # Stop workers
-    await asyncio.gather(*(stop_worker(w, n) for w, n in workers))
+    await asyncio.gather(*(stop_worker_async(w, n) for w, n in workers))
     LOG.info("All systems stopped")
 
 
