@@ -1,18 +1,23 @@
-# main.py
 """
+*keep_alive.py olmadığı için main.py sadece polling çalıştırıyor.
+Render URL (ör. https://wobot1.onrender.com/) boş 200 dönecek.
+Bu boş cevap UptimeRobot için yeterli.
+
 Production-ready main.py for WorkerA→WorkerB→WorkerC chain + Telegram bot
-Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
-Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
+Render free + UptimeRobot uyumlu
+- PTB v20+ → polling-only
+- Python 3.11/3.13 uyumlu
+- nest_asyncio patch
 """
 
 import os
 import logging
 import nest_asyncio
 import asyncio
-from contextlib import suppress
 import signal
+from contextlib import suppress
 
-from telegram.ext import ApplicationBuilder
+from telegram.ext import ApplicationBuilder, Update
 
 from utils.db import init_db
 from utils.monitoring import configure_logging
@@ -34,6 +39,7 @@ nest_asyncio.apply()
 configure_logging(logging.INFO)
 LOG = logging.getLogger("main")
 
+
 # -----------------------------
 # Worker setup
 # -----------------------------
@@ -48,6 +54,7 @@ async def setup_workers():
 
     worker_b = WorkerB(queue_raw, signal_callback=signal_callback)
     return worker_a, worker_b, worker_c
+
 
 # -----------------------------
 # Worker lifecycle helpers
@@ -65,6 +72,7 @@ async def stop_worker(worker, name: str):
         await worker.stop_async()
     except Exception:
         LOG.exception("Error stopping %s", name)
+
 
 # -----------------------------
 # Async Main
@@ -90,9 +98,7 @@ async def main():
 
     stop_event = asyncio.Event()
 
-    # -----------------------------
-    # Signal callback (Linux/Windows uyumlu)
-    # -----------------------------
+    # Shutdown signal handler
     def _shutdown(sig=None):
         LOG.warning("Shutdown signal %s received", getattr(sig, 'name', str(sig)))
         stop_event.set()
@@ -108,10 +114,16 @@ async def main():
     LOG.info("All workers started")
 
     # -----------------------------
-    # Start Telegram polling (tek satır)
+    # Start Telegram polling (Render + UptimeRobot için)
     # -----------------------------
-    polling_task = asyncio.create_task(app.run_polling(close_loop=False))
-    LOG.info("Polling started")
+    polling_task = asyncio.create_task(
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+            close_loop=False
+        )
+    )
+    LOG.info("Polling started (webhook disabled)")
 
     # Wait for shutdown signal
     await stop_event.wait()
@@ -126,6 +138,7 @@ async def main():
     await asyncio.gather(*(stop_worker(w, n) for w, n in workers))
 
     LOG.info("All systems stopped")
+
 
 # -----------------------------
 # Entry point
