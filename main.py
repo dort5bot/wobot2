@@ -107,9 +107,9 @@ async def main():
     await asyncio.gather(*(start_worker(w, n) for w, n in workers))
     LOG.info("All workers started")
 
-    # Start Telegram polling
-    await app.initialize()
-    await app.start()
+    # -----------------------------
+    # Start Telegram polling (tek satır)
+    # -----------------------------
     polling_task = asyncio.create_task(app.run_polling(close_loop=False))
     LOG.info("Polling started")
 
@@ -124,14 +124,6 @@ async def main():
 
     # Stop workers
     await asyncio.gather(*(stop_worker(w, n) for w, n in workers))
-
-    # Shutdown Telegram app
-    try:
-        await app.shutdown()
-        await app.stop()
-        LOG.info("PTB app shutdown complete")
-    except Exception:
-        LOG.exception("Error during app shutdown")
 
     LOG.info("All systems stopped")
 
