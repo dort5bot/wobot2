@@ -1,4 +1,4 @@
-# main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C)
+# main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
 import asyncio
 import signal
 import logging
@@ -28,7 +28,10 @@ async def async_main():
         LOG.error("TELEGRAM_BOT_TOKEN is not set. Exiting.")
         return
 
+    # PTB app
     app = ApplicationBuilder().token(token).build()
+
+    # Keep-alive webserver (Render ping)
     keep_alive()
     load_handlers(app)
 
@@ -50,8 +53,9 @@ async def async_main():
     worker_b.start()
     worker_c.start()
 
-    # Graceful shutdown
+    # Graceful shutdown event
     stop_event = asyncio.Event()
+
     def _request_shutdown(signame: str):
         LOG.warning("Signal %s received, shutting down...", signame)
         stop_event.set()
@@ -62,15 +66,28 @@ async def async_main():
         except NotImplementedError:
             signal.signal(sig, lambda *_: _request_shutdown(sig.name))
 
+    # -------------------------------
+    # Webhook setup (instead of polling)
+    # -------------------------------
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
-    LOG.info("Telegram polling started.")
+
+    webhook_url = f"{CONFIG.KEEPALIVE_URL}/{token}"
+    await app.bot.set_webhook(webhook_url)
+    LOG.info("Webhook set to %s", webhook_url)
+
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=CONFIG.PORT,
+        webhook_url=webhook_url,
+        stop_signals=None,  # biz kendimiz stop_event ile kontrol ediyoruz
+    )
+    # -------------------------------
 
     await stop_event.wait()
 
     LOG.info("Shutting down...")
-    await app.updater.stop()
+
     await app.stop()
     await app.shutdown()
 
