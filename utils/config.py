@@ -147,3 +147,7 @@ class AppConfig:
     DATABASE: DatabaseConfig = field(default_factory=DatabaseConfig)
 
 CONFIG = AppConfig()
+
+
+# ⚡ Webhook URL manuel .env üzerinden çekiliyor (Telegram Webhook için)
+CONFIG.WEBHOOK_URL = os.getenv("WEBHOOK_URL"
