@@ -59,7 +59,7 @@ async def main():
     configure_logging()
     init_db()
 
-    # Load Telegram handlers
+    # Telegram bot
     token = CONFIG.TELEGRAM.BOT_TOKEN
     if not token:
         LOG.error("TELEGRAM_BOT_TOKEN not set in .env")
@@ -69,14 +69,29 @@ async def main():
     load_handlers(app)
 
     # -----------------------------
-    # Queue oluştur
+    # Shared queue
     # -----------------------------
-    queue = asyncio.Queue()
+    queue_a_b = asyncio.Queue()
+    queue_b_c = asyncio.Queue()
 
-    # Workers
-    worker_a = WorkerA(queue)
-    worker_b = WorkerB(queue)
-    worker_c = WorkerC(queue)
+    # -----------------------------
+    # WorkerC (Trade executor)
+    # -----------------------------
+    worker_c = WorkerC()
+    # WorkerB sinyal callback → WorkerC queue'ya gönderir
+    async def signal_callback(source, symbol, side, strength=0.0, payload=None):
+        await worker_c.send_decision(payload)
+
+    # -----------------------------
+    # WorkerB (TA / Signal generator)
+    # -----------------------------
+    worker_b = WorkerB(queue=queue_a_b, signal_callback=signal_callback)
+
+    # -----------------------------
+    # WorkerA (Binance data collector)
+    # -----------------------------
+    worker_a = WorkerA(queue=queue_a_b)
+
     workers = [
         (worker_a, "WorkerA"),
         (worker_b, "WorkerB"),
@@ -87,7 +102,7 @@ async def main():
     for w, n in workers:
         asyncio.create_task(start_worker_async(w, n))
 
-    # Polling (Render free tier + UptimeRobot uyumlu)
+    # Telegram polling
     LOG.info("Polling started (Render free + UptimeRobot)")
     await app.run_polling(
         drop_pending_updates=True,
@@ -95,7 +110,7 @@ async def main():
         close_loop=False
     )
 
-    # Wait for shutdown
+    # Wait for shutdown signal
     await stop_event.wait()
     LOG.info("Shutdown triggered")
 
