@@ -1,4 +1,3 @@
-# main.py — PTB v20+ Trading Bot Entrypoint (Worker A/B/C, Render Webhook Mode)
 # main.py — PTB v20+ Trading Bot Entrypoint (Prod-ready, Worker A/B/C, Webhook Mode)
 # CONFIG’e dokunmadan .env üzerinden port ve keepalive URL alır
 # Flask gerekmiyor, sadece webhook ve UptimeRobot ping ile keep-alive
@@ -23,10 +22,7 @@ LOG = logging.getLogger("main")
 
 # -------------------------------
 async def uptime_ping_task(url: str, interval: int = 300):
-    """
-    UptimeRobot ping simülasyonu için async task.
-    interval: saniye
-    """
+    """UptimeRobot ping simülasyonu için async task."""
     import httpx
     async with httpx.AsyncClient(timeout=10) as client:
         while True:
@@ -77,18 +73,22 @@ async def async_main():
             signal.signal(sig, lambda *_: _request_shutdown(sig.name))
 
     # -------------------------------
-    # Start workers as tasks
-    async def start_worker(worker, name):
+    # Start workers (async wrapper)
+    async def start_worker_async(worker, name):
         try:
             LOG.info("Starting %s...", name)
-            await worker.start_async()
+            if hasattr(worker, "start_async"):
+                await worker.start_async()
+            else:
+                # sync start → run in threadpool
+                await asyncio.to_thread(worker.start)
         except Exception as e:
             LOG.exception("%s failed to start: %s", name, e)
 
     worker_tasks = [
-        asyncio.create_task(start_worker(worker_a, "WorkerA")),
-        asyncio.create_task(start_worker(worker_b, "WorkerB")),
-        asyncio.create_task(start_worker(worker_c, "WorkerC")),
+        asyncio.create_task(start_worker_async(worker_a, "WorkerA")),
+        asyncio.create_task(start_worker_async(worker_b, "WorkerB")),
+        asyncio.create_task(start_worker_async(worker_c, "WorkerC")),
     ]
 
     # -------------------------------
@@ -130,13 +130,22 @@ async def async_main():
     LOG.info("Stop event triggered. Shutting down...")
 
     # -------------------------------
-    # Cancel workers
-    for worker in (worker_a, worker_b, worker_c):
+    # Stop workers (async wrapper)
+    async def stop_worker_async(worker, name):
         try:
-            LOG.info("Stopping %s...", worker.__class__.__name__)
-            await worker.stop_async()
+            LOG.info("Stopping %s...", name)
+            if hasattr(worker, "stop_async"):
+                await worker.stop_async()
+            else:
+                await asyncio.to_thread(worker.stop)
         except Exception as e:
-            LOG.warning("Error stopping %s: %s", worker.__class__.__name__, e)
+            LOG.warning("Error stopping %s: %s", name, e)
+
+    await asyncio.gather(
+        stop_worker_async(worker_a, "WorkerA"),
+        stop_worker_async(worker_b, "WorkerB"),
+        stop_worker_async(worker_c, "WorkerC"),
+    )
 
     for task in worker_tasks:
         task.cancel()
@@ -167,4 +176,3 @@ if __name__ == "__main__":
         asyncio.run(async_main())
     except RuntimeError as e:
         LOG.error("Event loop error: %s", e)
-
