@@ -1,6 +1,8 @@
-# keep_alive.py — Basit Flask ping server (Render uyumlu)
+##keep_alive.py
+
 from flask import Flask
 import threading
+import os
 
 app = Flask(__name__)
 
@@ -8,15 +10,8 @@ app = Flask(__name__)
 def home():
     return "Bot is alive ✅"
 
-@app.route("/ping")
-def ping():
-    return "pong"
-
 def run():
-    # Render kendi PORT environment variable’ını set ediyor
-    import os
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 def keep_alive():
     t = threading.Thread(target=run)
