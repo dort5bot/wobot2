@@ -35,10 +35,15 @@ class BinanceConfig:
     BINANCE_TICKER_TTL: int = int(os.getenv("BINANCE_TICKER_TTL", 5))
     STREAM_INTERVAL: str = os.getenv("STREAM_INTERVAL", "1m")
 
+# ✅ jobs/work_a,b,c. py bölgesi
+    FUNDING_POLL_INTERVAL: int = int(os.getenv("FUNDING_POLL_INTERVAL", 5))  # ✅ work_a.py saniye cinsinden
+    
 # Fonksiyon: Binance API keylerini runtime’da güncelle
 def update_binance_keys(api_key: str, secret_key: str):
     CONFIG.BINANCE.API_KEY = api_key
     CONFIG.BINANCE.SECRET_KEY = secret_key
+
+
 
 # === Bot Config ===
 @dataclass
