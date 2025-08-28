@@ -144,8 +144,8 @@ async def async_main(args):
         setproctitle("wobot1:main")
 
     LOG.info("Boot sequence started")
-
     init_db()
+
     token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         LOG.error("Telegram BOT_TOKEN missing")
@@ -159,9 +159,11 @@ async def async_main(args):
 
     stop_event = asyncio.Event()
 
+    # --------------------------
+    # Shutdown signal handler
     def _shutdown(sig_name="UNKNOWN"):
         LOG.warning("Shutdown signal %s received", sig_name)
-        asyncio.get_running_loop().call_soon_threadsafe(stop_event.set)
+        stop_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -183,10 +185,11 @@ async def async_main(args):
     if args.keepalive_url:
         ping_task = asyncio.create_task(uptime_ping(args.keepalive_url, interval=args.keepalive_interval, stop_event=stop_event))
 
-    # PTB webhook / polling
+    # PTB initialize & polling/webhook
     await app.initialize()
     await app.start()
     webhook_task = None
+
     if args.mode == "webhook":
         if not args.keepalive_url:
             LOG.warning("Webhook mode requested but KEEPALIVE_URL missing")
@@ -206,14 +209,15 @@ async def async_main(args):
                 LOG.exception("Failed to run webhook")
                 stop_event.set()
     else:
-        asyncio.create_task(app.run_polling(close_loop=False))
+        polling_task = asyncio.create_task(app.run_polling(close_loop=False))
         LOG.info("Polling started")
 
+    # Wait for shutdown signal
     await stop_event.wait()
     LOG.info("Shutdown triggered")
 
     # Cancel auxiliary tasks
-    for t in [ping_task, health_task, webhook_task]:
+    for t in [ping_task, health_task, webhook_task, polling_task if args.mode=="polling" else None]:
         if t:
             t.cancel()
             with suppress(asyncio.CancelledError):
@@ -225,6 +229,7 @@ async def async_main(args):
     # PTB shutdown
     try:
         await app.shutdown()
+        await app.stop()
         LOG.info("PTB app shutdown complete")
     except Exception:
         LOG.exception("Error during app shutdown")
@@ -246,31 +251,11 @@ def build_argparser():
 # ------------------------------
 def main():
     args = build_argparser().parse_args()
-    rc = 1
     try:
-        try:
-            # Eğer mevcut loop varsa onu kullan
-            loop = asyncio.get_running_loop()
-            LOG.info("Existing event loop detected, using it")
-            task = loop.create_task(async_main(args))
-            loop.run_until_complete(task)
-            rc = task.result()
-        except RuntimeError:
-            # Eğer loop yoksa yeni oluştur
-            LOG.info("No running loop detected, creating a new loop")
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            rc = loop.run_until_complete(async_main(args))
+        asyncio.run(async_main(args))
     except Exception:
         LOG.exception("Unhandled exception in main")
-    finally:
-        try:
-            if not loop.is_running():
-                loop.stop()
-                loop.close()
-        except Exception:
-            pass
-    sys.exit(rc or 0)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
