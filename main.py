@@ -72,7 +72,7 @@ async def async_main():
     await app.initialize()
     await app.start()
 
-    webhook_url = f"{CONFIG.KEEPALIVE_URL}/{token}"
+    webhook_url = f"{CONFIG.WEBHOOK_URL}/{token}"
     await app.bot.set_webhook(webhook_url)
     LOG.info("Webhook set to %s", webhook_url)
 
