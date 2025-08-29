@@ -1,6 +1,6 @@
 # main.py
 """
-Production-ready main.py for WorkerA→WorkerB→WorkerC chain + Telegram bot
+Production-ready main.py for WorkerA→WorkerB→WorkerC→WorkerD chain + Telegram bot
 Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
 Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
 keep_alive.py eklendi ve main.py içinde asyncio.create_task(start_keepalive()) çağrıldı.
@@ -24,6 +24,7 @@ from utils.config import CONFIG
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
+from jobs.worker_d import WorkerD   # 🔹 WorkerD eklendi
 
 # 🔹 Keep-alive import
 from keep_alive import start_keepalive
@@ -47,12 +48,25 @@ async def setup_workers():
     worker_a = WorkerA(queue_raw)
     worker_c = WorkerC()
 
+    # WorkerB callback
     async def signal_callback(source: str, symbol: str, side: str, strength: float, payload: dict):
         LOG.info("Signal from %s: %s %s (strength=%.2f)", source, symbol, side, strength)
         await worker_c.send_decision(payload)
 
+    # WorkerD → trading signal callback
+    async def trading_signal_callback(signal_data: dict):
+        LOG.info("Trading signal: %s", signal_data)
+        payload = {
+            'type': 'trading_signal',
+            'data': signal_data,
+            'source': 'worker_d'
+        }
+        await worker_c.send_decision(payload)
+
     worker_b = WorkerB(queue_raw, signal_callback=signal_callback)
-    return worker_a, worker_b, worker_c
+    worker_d = WorkerD(signal_callback=trading_signal_callback)
+
+    return worker_a, worker_b, worker_c, worker_d
 
 # -----------------------------
 # Worker lifecycle helpers
@@ -94,8 +108,13 @@ async def main():
     load_handlers(app)
 
     # Workerları başlat
-    worker_a, worker_b, worker_c = await setup_workers()
-    workers = [(worker_a, "WorkerA"), (worker_b, "WorkerB"), (worker_c, "WorkerC")]
+    worker_a, worker_b, worker_c, worker_d = await setup_workers()
+    workers = [
+        (worker_a, "WorkerA"),
+        (worker_b, "WorkerB"),
+        (worker_c, "WorkerC"),
+        (worker_d, "WorkerD")
+    ]
 
     stop_event = asyncio.Event()
 
