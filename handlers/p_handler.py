@@ -120,3 +120,15 @@ def register(application):
         application.add_handler(CommandHandler(cmd, p_handler))     #harf boyutu desteği için bu eklendi
         #        application.add_handler(CommandHandler(COMMAND, p_handler))    #harf boyutu desteği için bu iptal
     LOG.info("P handler registered.")
+
+'''
+bilgi eksikliği yaşanmasın diye /P help veya /P ? çağrısı da yardım mesajı döndürebilir:
+        elif args[0] in {"help", "?", "h"}:
+            await update.message.reply_text(HELP)
+            return
+
+✅ SONUÇ
+Kodun oldukça başarılı. Sadece birkaç küçük kullanıcı hatası durumunu ele alırsan çok daha sağlam hale gelir. Eğer istersen /P komutunu inline butonlarla, emoji artı grafikli versiyonlarla da zenginleştirebiliriz.
+İstersen /P için test case veya unittest yapısı da öneririm.
+Hazırsan /P komutuna bağlı şekilde fiyat alarmı, analiz linki gibi entegre özellikler de eklenebilir.
+'''
