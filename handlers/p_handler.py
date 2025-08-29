@@ -115,5 +115,8 @@ async def p_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Plugin loader entry
 # -------------------------------------------------
 def register(application):
-    application.add_handler(CommandHandler(COMMAND, p_handler))
+    for cmd in ("P", "p"):    #Komut küçük harf de desteklesin bunu dene
+
+        application.add_handler(CommandHandler(cmd, p_handler))     #harf boyutu desteği için bu eklendi
+        #        application.add_handler(CommandHandler(COMMAND, p_handler))    #harf boyutu desteği için bu iptal
     LOG.info("P handler registered.")
