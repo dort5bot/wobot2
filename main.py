@@ -1,102 +1,135 @@
-#main.py
-import asyncio
-import logging
-import os
-import signal
-from contextlib import suppress
+# main.py
+"""
+Production-ready main.py for WorkerA→WorkerB→WorkerC chain + Telegram bot
+Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
+Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
+"""
 
-from aiohttp import web
+import os
+import logging
+import nest_asyncio
+import asyncio
+from contextlib import suppress
+import signal
+
 from telegram.ext import ApplicationBuilder
-from utils.monitoring import configure_logging
+
 from utils.db import init_db
-from utils.config import CONFIG
+from utils.monitoring import configure_logging
 from utils.handler_loader import load_handlers
+from utils.config import CONFIG
 
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
 
-LOG = logging.getLogger(__name__)
+# -----------------------------
+# Patch mevcut event loop
+# -----------------------------
+nest_asyncio.apply()
 
-# --- Keep-alive ---
-async def handle_root(request): 
-    return web.Response(text="ok")
+# -----------------------------
+# Logging
+# -----------------------------
+configure_logging(logging.INFO)
+LOG = logging.getLogger("main")
 
-async def handle_health(request): 
-    return web.json_response({"status": "ok"})
+# -----------------------------
+# Worker setup
+# -----------------------------
+async def setup_workers():
+    queue_raw = asyncio.Queue()
+    worker_a = WorkerA(queue_raw)
+    worker_c = WorkerC()
 
-async def start_web():
-    app = web.Application()
-    app.add_routes([
-        web.get("/", handle_root),
-        web.get("/health", handle_health)
-    ])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", "8080"))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    LOG.info("Keep-alive running on :%s", port)
-    return runner
+    async def signal_callback(source: str, symbol: str, side: str, strength: float, payload: dict):
+        LOG.info("Signal from %s: %s %s (strength=%.2f)", source, symbol, side, strength)
+        await worker_c.send_decision(payload)
 
-# --- Pipeline ---
-class Pipeline:
-    def __init__(self):
-        self.q_ab = asyncio.Queue(maxsize=5000)
-        self.worker_a = WorkerA(queue=self.q_ab)
-        self.worker_b = WorkerB(queue=self.q_ab)
-        self.worker_c = WorkerC()
-        self.application = None
+    worker_b = WorkerB(queue_raw, signal_callback=signal_callback)
+    return worker_a, worker_b, worker_c
 
-    async def start(self):
-        init_db()
-        configure_logging(logging.INFO)
+# -----------------------------
+# Worker lifecycle helpers
+# -----------------------------
+async def start_worker(worker, name: str):
+    LOG.info("Starting %s...", name)
+    try:
+        await worker.start_async()
+    except Exception:
+        LOG.exception("Failed to start %s", name)
 
-        if CONFIG.TELEGRAM.BOT_TOKEN:
-            self.application = ApplicationBuilder().token(CONFIG.TELEGRAM.BOT_TOKEN).build()
-            load_handlers(self.application)
-        else:
-            LOG.warning("No TELEGRAM_BOT_TOKEN defined")
+async def stop_worker(worker, name: str):
+    LOG.info("Stopping %s...", name)
+    try:
+        await worker.stop_async()
+    except Exception:
+        LOG.exception("Error stopping %s", name)
 
-        await self.worker_c.start_async()
-        await self.worker_b.start_async()
-        await self.worker_a.start_async()
-
-        if self.application:
-            LOG.info("Polling started (Render free + UptimeRobot)")
-            await self.application.initialize()
-            await self.application.start()
-
-    async def stop(self):
-        await self.worker_a.stop_async()
-        await self.worker_b.stop_async()
-        await self.worker_c.stop_async()
-        if self.application:
-            with suppress(Exception):
-                await self.application.stop()
-                await self.application.shutdown()
-        LOG.info("Bot stopped")
-
-# --- Main ---
+# -----------------------------
+# Async Main
+# -----------------------------
 async def main():
-    runner = await start_web()
-    pipe = Pipeline()
-    await pipe.start()
+    LOG.info("Boot sequence started")
+    init_db()
+
+    token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        LOG.error("Telegram BOT_TOKEN missing")
+        return
+
+    # Telegram app oluştur
+    app = ApplicationBuilder().token(token).build()
+
+    # Handler yükle
+    load_handlers(app)
+
+    # Workerları başlat
+    worker_a, worker_b, worker_c = await setup_workers()
+    workers = [(worker_a, "WorkerA"), (worker_b, "WorkerB"), (worker_c, "WorkerC")]
 
     stop_event = asyncio.Event()
 
-    def _signal(sig):
-        LOG.info("Signal %s", sig)
+    # -----------------------------
+    # Signal callback (Linux/Windows uyumlu)
+    # -----------------------------
+    def _shutdown(sig=None):
+        LOG.warning("Shutdown signal %s received", getattr(sig, 'name', str(sig)))
         stop_event.set()
 
-    loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        with suppress(NotImplementedError):
-            loop.add_signal_handler(sig, _signal, sig.name)
+        try:
+            asyncio.get_running_loop().add_signal_handler(sig, _shutdown, sig)
+        except NotImplementedError:
+            signal.signal(sig, lambda *_: _shutdown(sig))
 
+    # Start workers
+    await asyncio.gather(*(start_worker(w, n) for w, n in workers))
+    LOG.info("All workers started")
+
+    # -----------------------------
+    # Start Telegram polling (tek satır)
+    # -----------------------------
+    polling_task = asyncio.create_task(app.run_polling(close_loop=False))
+    LOG.info("Polling started")
+
+    # Wait for shutdown signal
     await stop_event.wait()
-    await pipe.stop()
-    await runner.cleanup()
+    LOG.info("Shutdown triggered")
 
+    # Cancel polling
+    polling_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await polling_task
+
+    # Stop workers
+    await asyncio.gather(*(stop_worker(w, n) for w, n in workers))
+
+    LOG.info("All systems stopped")
+
+# -----------------------------
+# Entry point
+# -----------------------------
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
