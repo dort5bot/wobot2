@@ -75,4 +75,17 @@ def log_decision(symbol, decision, strength, reason=""):
     """, (symbol, decision, strength, reason, True))
     conn.commit()
     conn.close()
-  
+
+# jobs/worker_a.py    api key+secret için
+def get_user_api_keys(user_id: str) -> dict:
+    """
+    Veritabanından user_id'ye karşılık gelen Binance API key ve secret'ı çeker.
+    Dönüş: {"api_key": "xxx", "secret_key": "yyy"} veya boş dict
+    """
+    # Bu örnek dummy; senin projene göre veritabanı sorgusu yazılmalı
+    dummy_user_db = {
+        "user123": {"api_key": "abc123", "secret_key": "def456"},
+        "user456": {"api_key": "ghi789", "secret_key": "jkl012"}
+    }
+    return dummy_user_db.get(user_id, {})
+
