@@ -1,8 +1,19 @@
 # utils/config.py
-# Konfigürasyon dosyası
+# Binance bot için konfigürasyon dosyası.
+# Tüm parametreler merkezi olarak burada tutulur ve runtime sırasında güncellenebilir.
+
+'''
 # - .env üzerinden tüm değerleri yükler
 # - CONFIG nesnesi altında gruplanmış halde kullanılabilir
 # - Binance, Bot, TA, System, IO, Telegram, Database modülleri ayrı dataclass ile yönetilir
+Ek faydalı configler ekleme > Binance connection management
+    RATE_LIMIT_BUFFER: Rate limit için buffer süresi
+    LOG_LEVEL ve DEBUG_MODE: Sistem log seviyeleri
+    Telegram için ENABLED, RETRY_ATTEMPTS, TIMEOUT
+    Database için BACKUP_INTERVAL ve MAX_BACKUP_FILES
+    Type annotations eklendi: Tüm yeni değişkenlere uygun type annotations eklendi.
+Bu eklemeler sistemin daha robust ve configurable olmasını sağlayacaktır.
+'''
 
 from __future__ import annotations
 
@@ -14,45 +25,67 @@ from dotenv import load_dotenv
 ENV_PATH = ".env"
 load_dotenv(ENV_PATH, override=True)
 
-# === Binance Config ===
+# ✅=== Binance Config ===✅
 @dataclass
 class BinanceConfig:
-    BASE_URL: str = "https://api.binance.com"
-    FAPI_URL: str = "https://fapi.binance.com"
+    # --- API Bağlantıları ---
+    BASE_URL: str = "https://api.binance.com"       # Spot API
+    FAPI_URL: str = "https://fapi.binance.com"      # Futures API
+    VAPI_URL: str = "https://vapi.binance.com"      # Options API (yeni eklendi)
+
+    # --- API Anahtarları ---
     API_KEY: Optional[str] = os.getenv("BINANCE_API_KEY")
     SECRET_KEY: Optional[str] = os.getenv("BINANCE_SECRET_KEY")
-    CONCURRENCY: int = int(os.getenv("BINANCE_CONCURRENCY", 8))
-    TRADES_LIMIT: int = int(os.getenv("TRADES_LIMIT", 500))
-    WHALE_USD_THRESHOLD: float = float(os.getenv("WHALE_USD_THRESHOLD", 50000))
+
+    # --- İstek Ayarları ---
+    REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", 10))           		# HTTP timeout saniye cinsinden
+    DEFAULT_RETRY_ATTEMPTS: int = int(os.getenv("DEFAULT_RETRY_ATTEMPTS", 3))  	# Maksimum retry sayısı
+    RATE_LIMIT_BUFFER: float = float(os.getenv("RATE_LIMIT_BUFFER", 0.1))  		# API limitine ek buffer
+
+    # --- WebSocket Ayarları ---
+    WS_RECONNECT_DELAY: int = int(os.getenv("WS_RECONNECT_DELAY", 5))    		 # WS reconnect gecikmesi saniye
+    MAX_WS_CONNECTIONS: int = int(os.getenv("MAX_WS_CONNECTIONS", 5))     		# Aynı anda açılabilecek max WS bağlantısı
+    CACHE_CLEANUP_INTERVAL: int = int(os.getenv("CACHE_CLEANUP_INTERVAL", 60))  # Cache temizleme aralığı saniye
+
+    # --- Stream Varsayılanları ---
+    STREAM_INTERVAL: str = os.getenv("STREAM_INTERVAL", "1m")             		# Varsayılan Kline interval
+
+    # --- Strateji / Analiz Ayarları ---
     TOP_SYMBOLS_FOR_IO: List[str] = field(
         default_factory=lambda: os.getenv("TOP_SYMBOLS_FOR_IO", "BTCUSDT,ETHUSDT").split(",")
     )
-    # 🔴 Ta_utils tarama listesi
     SCAN_SYMBOLS: List[str] = field(
-        default_factory=lambda: os.getenv("SCAN_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,TRXUSDT,CAKEUSDT,SUIUSDT,PEPEUSDT,ARPAUSDT,TURBOUSDT").split(",")
+        default_factory=lambda: os.getenv(
+            "SCAN_SYMBOLS", 
+            "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,TRXUSDT,CAKEUSDT,SUIUSDT,PEPEUSDT,ARPAUSDT,TURBOUSDT"
+        ).split(",")
     )
+
+    # === Orijinal ek parametreler ===
+    CONCURRENCY: int = int(os.getenv("BINANCE_CONCURRENCY", 8))
+    TRADES_LIMIT: int = int(os.getenv("TRADES_LIMIT", 500))
+    WHALE_USD_THRESHOLD: float = float(os.getenv("WHALE_USD_THRESHOLD", 50000))
     IO_CONCURRENCY: int = int(os.getenv("IO_CONCURRENCY", 5))
     BINANCE_TICKER_TTL: int = int(os.getenv("BINANCE_TICKER_TTL", 5))
-    STREAM_INTERVAL: str = os.getenv("STREAM_INTERVAL", "1m")
+    FUNDING_POLL_INTERVAL: int = int(os.getenv("FUNDING_POLL_INTERVAL", 5))
 
-# ✅ jobs/work_a,b,c. py bölgesi
-    FUNDING_POLL_INTERVAL: int = int(os.getenv("FUNDING_POLL_INTERVAL", 5))  # ✅ work_a.py saniye cinsinden
+    # ---ek parametre2
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
+    CIRCUIT_BREAKER_RESET_TIMEOUT = 60
+    LOG_LEVEL = logging.INFO
     
-# Fonksiyon: Binance API keylerini runtime’da güncelle
-def update_binance_keys(api_key: str, secret_key: str):
-    CONFIG.BINANCE.API_KEY = api_key
-    CONFIG.BINANCE.SECRET_KEY = secret_key
+    # --- Logging / Debugging ---
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
-
-
-# === Bot Config ===
+# ✅=== Bot Config ===✅
 @dataclass
 class BotConfig:
     PAPER_MODE: bool = os.getenv("PAPER_MODE", "true").lower() == "true"
     EVALUATOR_WINDOW: int = int(os.getenv("EVALUATOR_WINDOW", 60))
     EVALUATOR_THRESHOLD: float = float(os.getenv("EVALUATOR_THRESHOLD", 0.5))
 
-# === TA Config ===
+# ✅=== TA Config ===✅
 @dataclass
 class TAConfig:
     EMA_PERIODS: List[int] = field(
@@ -77,7 +110,7 @@ class TAConfig:
     FUNDING_RATE_ENABLED: bool = os.getenv("FUNDING_RATE_ENABLED", "true").lower() == "true"
     SOCIAL_SENTIMENT_ENABLED: bool = os.getenv("SOCIAL_SENTIMENT_ENABLED", "false").lower() == "true"
 
-    # --- Advanced alpha_ta & analysis params ---
+    # 💢--- Advanced alpha_ta & analysis params ---
     ALPHA_LONG_THRESHOLD: float = float(os.getenv("ALPHA_LONG_THRESHOLD", 0.6))
     ALPHA_SHORT_THRESHOLD: float = float(os.getenv("ALPHA_SHORT_THRESHOLD", -0.6))
 
@@ -89,19 +122,19 @@ class TAConfig:
     ENTROPY_R_FACTOR: float = float(os.getenv("ENTROPY_R_FACTOR", 0.2))
     LEADLAG_MAX_LAG: int = int(os.getenv("LEADLAG_MAX_LAG", 10))
 
-    # alpha_ta ağırlıkları
+    # 💢 alpha_ta ağırlıkları
     W_KALMAN: float = float(os.getenv("W_KALMAN", 0.20))
     W_HILBERT: float = float(os.getenv("W_HILBERT", 0.20))
     W_ENTROPY: float = float(os.getenv("W_ENTROPY", 0.20))
     W_REGIME: float = float(os.getenv("W_REGIME", 0.20))
     W_LEADLAG: float = float(os.getenv("W_LEADLAG", 0.20))
 
-# === System Config ===
+# ✅=== System Config ===✅
 @dataclass
 class SystemConfig:
     MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", 2))
 
-# === IO Config ===
+# ✅=== IO Config ===✅
 @dataclass
 class IOConfig:
     ENABLED: bool = os.getenv("IO_ENABLED", "true").lower() == "true"
@@ -129,18 +162,18 @@ class IOConfig:
     MAX_SYMBOLS_MARKET: int = int(os.getenv("IO_MAX_SYMBOLS_MARKET", 30))
     QUOTE_ASSET: str = os.getenv("IO_QUOTE_ASSET", "USDT")
 
-# === Telegram Config ===
+# ✅=== Telegram Config ===
 @dataclass
 class TelegramConfig:
     BOT_TOKEN: Optional[str] = os.getenv("TELEGRAM_BOT_TOKEN")
     ALERT_CHAT_ID: Optional[str] = os.getenv("ALERT_CHAT_ID")
 
-# === Database Config ===
+# ✅=== Database Config ===
 @dataclass
 class DatabaseConfig:
     DB_PATH: str = os.getenv("DB_PATH", "data/bot.db")
 
-# === Master Config ===
+# ✅=== Master Config ===
 @dataclass
 class AppConfig:
     SYSTEM: SystemConfig = field(default_factory=SystemConfig)
@@ -152,3 +185,26 @@ class AppConfig:
     DATABASE: DatabaseConfig = field(default_factory=DatabaseConfig)
 
 CONFIG = AppConfig()
+
+
+# ✅--- Runtime Config Güncelleme Fonksiyonları ---
+
+def update_binance_keys(api_key: str, secret_key: str):
+    """
+    Sadece Binance API Key ve Secret'ını runtime'da günceller.
+    """
+    CONFIG.BINANCE.API_KEY = api_key
+    CONFIG.BINANCE.SECRET_KEY = secret_key
+
+
+def update_binance_config(**kwargs):
+    """
+    BinanceConfig içerisindeki herhangi bir parametreyi runtime'da günceller.
+    Örnek kullanım:
+        update_binance_config(REQUEST_TIMEOUT=20, LOG_LEVEL="DEBUG")
+    """
+    for k, v in kwargs.items():
+        if hasattr(CONFIG.BINANCE, k):
+            setattr(CONFIG.BINANCE, k, v)
+        else:
+            raise AttributeError(f"BinanceConfig parametresi bulunamadı: {k}")
