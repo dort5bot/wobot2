@@ -1,8 +1,15 @@
 # jobs/worker_a.py
+'''
+WorkerA class'ında kullanılacak BinanceClient nesnesi, duruma göre:
+✅ user_id verilirse: ilgili kullanıcının API key + secret bilgisi veritabanından çekilsin.
+✅ user_id verilmezse:.env'de tanımlı CONFIG.BINANCE.API_KEY varsa onu kullan.
+Yoksa → sadece public endpoint'ler desteklensin (örneğin WebSocket veya funding rate gibi public erişimli endpoint’ler çalışsın, auth isteyenler çalışmasın veya loglansın).
+'''
 import asyncio
 import logging
 from utils.config import CONFIG
 from utils.binance_api import get_binance_api
+from utils.db import get_user_api_keys  # <- user_id ile key çekmek için (örnek fonksiyon)
 
 LOG = logging.getLogger("worker_a")
 
@@ -13,12 +20,39 @@ class WorkerA:
     - Kline streamlerini queue'ya aktarır
     - Funding rate verilerini periyodik olarak alır ve queue'ya koyar
     """
-    def __init__(self, queue: asyncio.Queue, loop=None):
+    def __init__(self, queue: asyncio.Queue, loop=None, user_id: str = None):
         self.queue = queue
         self.loop = loop or asyncio.get_event_loop()
-        self.client = get_binance_api()
         self._running = False
         self._tasks: list[asyncio.Task] = []
+
+        # Akıllı API client oluşturma
+        self.client = self._init_binance_client(user_id)
+
+    def _init_binance_client(self, user_id: str = None):
+        """
+        Kullanıcı bazlı veya default Binance API client'ı oluşturur.
+        """
+        if user_id:
+            user_keys = get_user_api_keys(user_id)
+            if user_keys and user_keys.get("api_key") and user_keys.get("secret_key"):
+                LOG.info(f"WorkerA: User-specific API keys loaded for user_id={user_id}")
+                return get_binance_api(
+                    api_key=user_keys["api_key"],
+                    api_secret=user_keys["secret_key"]
+                )
+            else:
+                LOG.warning(f"WorkerA: user_id={user_id} için API key bulunamadı, fallback olarak default key kullanılacak.")
+
+        if CONFIG.BINANCE.API_KEY and CONFIG.BINANCE.SECRET_KEY:
+            LOG.info("WorkerA: Default API keys from .env kullanılıyor.")
+            return get_binance_api(
+                api_key=CONFIG.BINANCE.API_KEY,
+                api_secret=CONFIG.BINANCE.SECRET_KEY
+            )
+
+        LOG.info("WorkerA: Public-only Binance client oluşturuldu.")
+        return get_binance_api()  # Public erişim (API key yok)
 
     async def start_async(self):
         if self._running:
@@ -44,8 +78,11 @@ class WorkerA:
             try:
                 data = {}
                 for symbol in CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO:
-                    fr = await self.client.get_funding_rate(symbol)
-                    data[symbol] = fr
+                    try:
+                        fr = await self.client.get_funding_rate(symbol)
+                        data[symbol] = fr
+                    except ValueError as ve:
+                        LOG.warning(f"Funding rate alınamadı ({symbol}): {ve}")
                 await self.queue.put({"funding": data})
             except asyncio.CancelledError:
                 raise
@@ -73,16 +110,3 @@ class WorkerA:
                 pass
         self._tasks.clear()
         LOG.info("WorkerA stopped")
-
-
-# -------------------------------------------------------------
-# BinanceClient içine eklenecek WebSocket helper
-# -------------------------------------------------------------
-async def ws_kline(self, symbol: str, interval: str, callback):
-    """
-    Kline stream'i başlatır ve gelen verileri callback ile iletir
-    """
-    url = f"wss://stream.binance.com:9443/ws/{symbol}@kline_{interval}"
-    await self.ws_subscribe(url, callback)
-
-
