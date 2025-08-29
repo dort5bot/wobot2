@@ -364,55 +364,57 @@ IO_FUNCTIONS = {
 }
 
 # =============================================================
-# Trading Pipeline Functions - BURAYA EKLE
+# Trading Pipeline Functions
 # =============================================================
-
 async def optimized_trading_pipeline(symbol: str = "BTCUSDT", 
                                    interval: str = "1m",
                                    callback: Optional[Callable] = None):
     """
     Geliştirilmiş trading pipeline with caching and error handling
     """
-    # ✅ Fonksiyon içinde local logger
     logger = logging.getLogger("ta_pipeline")
     
     from utils.binance_api import get_binance_api
     client = get_binance_api()
-    pipeline_interval = getattr(CONFIG.TA, 'PIPELINE_INTERVAL', 60)
+    pipeline_interval = getattr(CONFIG.TA, 'TA_PIPELINE_INTERVAL', 60)
+    min_data_points = getattr(CONFIG.TA, 'TA_MIN_DATA_POINTS', 20)
+    cache_ttl = getattr(CONFIG.TA, 'TA_CACHE_TTL', 300)
     
     while True:
         try:
-            # Cache kontrolü
-            cache_key = f"{symbol}_{interval}_ta"
+            # 1. ÖNCE cache kontrolü
             cached_result = ta_cache.get_ta_result(symbol, interval, 'full_analysis')
             
             if cached_result:
-                logger.debug("Using cached TA results for %s", symbol)  # ✅
+                logger.debug("Using cached TA results for %s", symbol)
                 if callback:
                     await callback(cached_result)
                 await asyncio.sleep(pipeline_interval)
                 continue
             
-            # 1. Veriyi çek
+            # 2. Cache yoksa, veriyi çek
             klines = await client.get_klines(symbol, interval, limit=100)
             if not klines:
                 await asyncio.sleep(30)
                 continue
             
             df = klines_to_dataframe(klines)
-            if len(df) < 20:  # Minimum data check
+            
+            # 3. ŞİMDİ data kontrolü yap (df artık tanımlı)
+            if len(df) < min_data_points:
+                logger.warning("Insufficient data for %s: %d points", symbol, len(df))
                 await asyncio.sleep(30)
                 continue
             
-            # 2. TA hesapla (threaded)
+            # 4. TA hesapla (threaded)
             ta_results = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: calculate_all_ta_hybrid(df, symbol)
             )
             
-            # 3. Sinyal üret
+            # 5. Sinyal üret
             signal = generate_signals(df)
             
-            # 4. Sonuçları paketle
+            # 6. Sonuçları paketle
             result = {
                 'symbol': symbol,
                 'timestamp': time.time(),
@@ -422,25 +424,21 @@ async def optimized_trading_pipeline(symbol: str = "BTCUSDT",
                               for k, v in ta_results.items() if v is not None}
             }
             
-            # 5. Cache'e kaydet
-            ta_cache.set_ta_result(symbol, interval, 'full_analysis', result, ttl=300)
+            # 7. Cache'e kaydet
+            ta_cache.set_ta_result(symbol, interval, 'full_analysis', result, ttl=cache_ttl)
             
-            # 6. Callback ile gönder
+            # 8. Callback ile gönder
             if callback and signal['signal'] != 0:
                 await callback(result)
             
-            # 7. Interval kadar bekle
+            # 9. Interval kadar bekle
             await asyncio.sleep(pipeline_interval)
             
         except asyncio.CancelledError:
             break
         except Exception as e:
-            LOG.error("Trading pipeline error for %s: %s", symbol, e)
-            await asyncio.sleep(30)
-
-# =============================================================
-# Registry - DEVAM
-# =============================================================
+            logger.error("Trading pipeline error for %s: %s", symbol, e)  # ✅ logger kullan
+            await asyncio.sleep(30)  # ❌ pipeline_interval değil, sabit bekleme
 
 # Genel amaçlı string-çağrı registry
 TA_FUNCTIONS = {
@@ -950,3 +948,4 @@ async def health_check() -> Dict[str, Any]:
         "status": "healthy"
 
     }
+
