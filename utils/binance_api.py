@@ -89,15 +89,15 @@ class BinanceClient:
     """
     REST + WS wrapper. Temel + Pro metrikler içerir.
     """
-        def __init__(self, api_key=None, secret_key=None):
-        # Mevcut API key'leri config'den almak yerine parametre olarak al
-        if api_key and secret_key:
-            CONFIG.BINANCE.API_KEY = api_key
-            CONFIG.BINANCE.SECRET_KEY = secret_key
-    ''' ap için iptal edildi
-    def __init__(self):
-    '''
-        self.http = http
+    def __init__(self, api_key=None, secret_key=None):
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.http = BinanceHTTPClient(api_key, secret_key)
+
+# ap için iptal edildi
+#    def __init__(self):
+#        self.http = http
+#
         
         # Async loop yoksa yarat
         try:
