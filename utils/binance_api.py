@@ -1,9 +1,7 @@
-# utils/binance_api.py
+# utils/binance_api.py - BÖLÜM 1/2
 ''' 
 Binance HTTP & WebSocket client (async) - Gelişmiş Sürüm
-CONFIG entegre edilmiştir.
-Asenkron HTTP istekleri, WebSocket abonelikleri, cache mekanizması, retry + exponential backoff gibi sağlam özellikleri içerir.
-Temel ve pro metrikleri hesaplayan fonksiyonlar da eklenmiştir.
+Kullanıcı bazlı API key desteği ile entegre edilmiştir.
 '''
 
 import os
@@ -23,6 +21,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 
 from utils.config import CONFIG
+from utils.apikey_utils import get_apikey
 
 # -------------------------------------------------------------
 # Logger
@@ -58,8 +57,8 @@ class CircuitBreaker:
         self.reset_timeout = reset_timeout
         self.failure_count = 0
         self.last_failure_time = 0
-        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
-    
+        self.state = "CLOSED"
+
     async def execute(self, func, *args, **kwargs):
         if self.state == "OPEN":
             if time.time() - self.last_failure_time > self.reset_timeout:
@@ -76,10 +75,8 @@ class CircuitBreaker:
         except Exception as e:
             self.failure_count += 1
             self.last_failure_time = time.time()
-            
             if self.failure_count >= self.failure_threshold:
                 self.state = "OPEN"
-            
             raise e
 
 # Global circuit breaker instance
@@ -92,9 +89,19 @@ binance_circuit_breaker = CircuitBreaker(
 # HTTP Katmanı: Retry + Exponential Backoff + TTL Cache
 # -------------------------------------------------------------
 class BinanceHTTPClient:
-    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
-        self.api_key = api_key or CONFIG.BINANCE.API_KEY
-        self.secret_key = secret_key or CONFIG.BINANCE.SECRET_KEY
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None, user_id: Optional[int] = None):
+        # Kullanıcı bazlı veya global API key'leri belirle
+        self.user_id = user_id
+        self.api_key = api_key
+        self.secret_key = secret_key
+        
+        # Kullanıcı bazlı key yoksa global key'leri kullan
+        if not self.api_key or not self.secret_key:
+            self.api_key = CONFIG.BINANCE.API_KEY
+            self.secret_key = CONFIG.BINANCE.SECRET_KEY
+        
+        LOG.info(f"HTTP Client initialized for user_id: {user_id}, has_keys: {bool(self.api_key and self.secret_key)}")
+        
         self.client = httpx.AsyncClient(
             base_url=CONFIG.BINANCE.BASE_URL, 
             timeout=CONFIG.BINANCE.REQUEST_TIMEOUT
@@ -107,7 +114,6 @@ class BinanceHTTPClient:
         self.metrics = RequestMetrics()
 
     def _cleanup_cache(self):
-        """Süresi dolmuş cache entry'lerini temizler"""
         current_time = time.time()
         expired_keys = [
             key for key, (ts, _) in self._cache.items()
@@ -135,6 +141,9 @@ class BinanceHTTPClient:
         params = params or {}
 
         if signed:
+            if not self.api_key or not self.secret_key:
+                raise ValueError("Bu endpoint için API key + secret gerekli")
+                
             ts = int(time.time() * 1000)
             params["timestamp"] = ts
             query = urlencode(params)
@@ -143,7 +152,7 @@ class BinanceHTTPClient:
             params["signature"] = signature
             headers["X-MBX-APIKEY"] = self.api_key
 
-        # Cache temizleme (periodik)
+        # Cache temizleme
         current_time_cleanup = time.time()
         if current_time_cleanup - self._last_cache_cleanup > CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
             self._cleanup_cache()
@@ -186,13 +195,11 @@ class BinanceHTTPClient:
                 
             except httpx.HTTPStatusError as e:
                 if e.response.status_code >= 500:
-                    # Server error - retry
                     delay = min(2 ** attempt, 30)
                     LOG.warning("Server error %s, retrying in %s", e.response.status_code, delay)
                     await asyncio.sleep(delay)
                     continue
                 else:
-                    # Client error - don't retry
                     self.metrics.failed_requests += 1
                     raise
                     
@@ -234,9 +241,6 @@ class BinanceWebSocketManager:
         self._running = True
 
     async def _listen(self, stream_url: str, callback: Callable[[Dict[str, Any]], Any]):
-        """
-        WS connection + reconnect loop.
-        """
         while self._running:
             try:
                 async with websockets.connect(stream_url, ping_interval=20, ping_timeout=10) as ws:
@@ -255,46 +259,34 @@ class BinanceWebSocketManager:
                 await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
 
     async def subscribe(self, stream_name: str, callback: Callable):
-        """Subscribe to a websocket stream"""
         if stream_name not in self.connections:
             await self._create_connection(stream_name)
-        
         self.callbacks[stream_name].append(callback)
 
     async def _create_connection(self, stream_name: str):
-        """Create a new websocket connection"""
         url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-        
         try:
             ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
             self.connections[stream_name] = ws
             self.metrics.total_connections += 1
-            
-            # Start listening to this stream
             asyncio.create_task(self._listen_stream(stream_name))
-            
         except Exception as e:
             self.metrics.failed_connections += 1
             LOG.error("Failed to create WS connection for %s: %s", stream_name, e)
             raise
 
     async def _listen_stream(self, stream_name: str):
-        """Listen to messages from a websocket stream"""
         while self._running and stream_name in self.connections:
             try:
                 ws = self.connections[stream_name]
                 msg = await ws.recv()
                 self.metrics.messages_received += 1
-                
                 data = json.loads(msg)
-                
-                # Call all registered callbacks
                 for callback in self.callbacks[stream_name]:
                     try:
                         await callback(data)
                     except Exception as e:
                         LOG.error("Callback error for %s: %s", stream_name, e)
-                        
             except websockets.ConnectionClosed:
                 LOG.warning("Connection closed for %s, reconnecting...", stream_name)
                 await self._reconnect(stream_name)
@@ -303,17 +295,14 @@ class BinanceWebSocketManager:
                 await self._reconnect(stream_name)
 
     async def _reconnect(self, stream_name: str):
-        """Reconnect to a websocket stream"""
         if stream_name in self.connections:
             try:
                 await self.connections[stream_name].close()
             except:
                 pass
             del self.connections[stream_name]
-        
         self.metrics.reconnections += 1
         await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
-        
         if self._running:
             try:
                 await self._create_connection(stream_name)
@@ -321,24 +310,20 @@ class BinanceWebSocketManager:
                 LOG.error("Failed to reconnect %s: %s", stream_name, e)
 
     def start_symbol_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]):
-        """Start ticker stream (alternative method)"""
         stream_name = f"{symbol.lower()}@ticker"
         asyncio.create_task(self.subscribe(stream_name, callback))
 
     def start_kline_stream(self, symbol: str, interval: str, callback: Callable[[Dict[str, Any]], Any]):
-        """Start kline stream (alternative method)"""
         stream_name = f"{symbol.lower()}@kline_{interval}"
         asyncio.create_task(self.subscribe(stream_name, callback))
 
     def start_order_book(self, symbol: str, depth: int, callback: Callable[[Dict[str, Any]], Any]):
-        """Start order book stream (alternative method)"""
         if depth not in [5, 10, 20]:
             raise ValueError("Depth must be one of [5, 10, 20]")
         stream_name = f"{symbol.lower()}@depth{depth}"
         asyncio.create_task(self.subscribe(stream_name, callback))
 
     async def close_all(self):
-        """Close all websocket connections"""
         self._running = False
         for stream_name, ws in self.connections.items():
             try:
@@ -358,22 +343,18 @@ class BinanceWebSocketManager:
 # Veri Formatı Dönüşüm Fonksiyonları
 # -------------------------------------------------------------
 def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
-    """Binance klines verisini pandas DataFrame'e dönüştürür."""
     df = pd.DataFrame(klines, columns=[
         'open_time', 'open', 'high', 'low', 'close', 'volume',
         'close_time', 'quote_asset_volume', 'number_of_trades',
         'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
     ])
     
-    # Numeric columns conversion
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Time conversion
     df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
     df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
-    
     df.set_index('open_time', inplace=True)
     return df[['open', 'high', 'low', 'close', 'volume']]
 
@@ -381,17 +362,11 @@ def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
 # BinanceClient Wrapper
 # -------------------------------------------------------------
 class BinanceClient:
-    """
-    Binance REST + WS wrapper
-    Temel + Pro metrikler içerir.
-    - Public endpointler: API key gerekmez
-    - Private endpointler: API key + secret gerekir
-    """
-
-    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
-        self.api_key = api_key or CONFIG.BINANCE.API_KEY
-        self.secret_key = secret_key or CONFIG.BINANCE.SECRET_KEY
-        self.http = BinanceHTTPClient(self.api_key, self.secret_key)
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None, user_id: Optional[int] = None):
+        self.user_id = user_id
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.http = BinanceHTTPClient(self.api_key, self.secret_key, self.user_id)
         self.ws_manager = BinanceWebSocketManager()
 
         try:
@@ -400,9 +375,12 @@ class BinanceClient:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
 
+    def test_connection(self):
+        LOG.info(f"Binance client initialized for user_id: {self.user_id}, has_keys: {bool(self.http.api_key and self.http.secret_key)}")
+        return True
+
     # ---------------------------------------------------------
     # ✅ PUBLIC (API key gerekmez)
-    # --- REST Methods ---
     # ---------------------------------------------------------
     async def get_server_time(self) -> Dict[str, Any]:
         return await self.http.get_server_time()
@@ -438,7 +416,6 @@ class BinanceClient:
         )
 
     async def get_klines_dataframe(self, symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataFrame:
-        """Klines verisini DataFrame formatında döndürür"""
         klines = await self.get_klines(symbol, interval, limit)
         return klines_to_dataframe(klines)
 
@@ -466,10 +443,9 @@ class BinanceClient:
 
     # ---------------------------------------------------------
     # ✅ PRIVATE (API key + secret zorunlu)
-    # --- Signed Spot & Futures ---
     # ---------------------------------------------------------
     async def _require_keys(self):
-        if not self.api_key or not self.secret_key:
+        if not self.http.api_key or not self.http.secret_key:
             raise ValueError("Bu endpoint için API key + secret gerekli")
 
     async def get_account_info(self) -> Dict[str, Any]:
@@ -505,43 +481,35 @@ class BinanceClient:
     # --- WebSocket Methods ---
     # -----------
     async def ws_ticker(self, symbol: str, callback: Callable):
-        """Subscribe to ticker stream"""
         stream_name = f"{symbol.lower()}@ticker"
         await self.ws_manager.subscribe(stream_name, callback)
 
     async def ws_trades(self, symbol: str, callback: Callable):
-        """Subscribe to trades stream"""
         stream_name = f"{symbol.lower()}@trade"
         await self.ws_manager.subscribe(stream_name, callback)
 
     async def ws_order_book(self, symbol: str, depth: int, callback: Callable):
-        """Subscribe to order book stream"""
         if depth not in [5, 10, 20]:
             raise ValueError("Depth must be one of [5, 10, 20]")
         stream_name = f"{symbol.lower()}@depth{depth}"
         await self.ws_manager.subscribe(stream_name, callback)
 
     async def ws_kline(self, symbol: str, interval: str, callback: Callable):
-        """Subscribe to kline stream"""
         stream_name = f"{symbol.lower()}@kline_{interval}"
         await self.ws_manager.subscribe(stream_name, callback)
 
     async def ws_multiplex(self, streams: List[str], callback: Callable):
-        """Subscribe to multiple streams using multiplex connection"""
         combined_streams = "/".join(streams)
         stream_name = f"streams={combined_streams}"
         await self.ws_manager.subscribe(stream_name, callback)
 
     def start_symbol_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]):
-        """Start ticker stream (alternative method)"""
         self.ws_manager.start_symbol_ticker(symbol, callback)
 
     def start_kline_stream(self, symbol: str, interval: str, callback: Callable[[Dict[str, Any]], Any]):
-        """Start kline stream (alternative method)"""
         self.ws_manager.start_kline_stream(symbol, interval, callback)
 
     def start_order_book(self, symbol: str, depth: int, callback: Callable[[Dict[str, Any]], Any]):
-        """Start order book stream (alternative method)"""
         self.ws_manager.start_order_book(symbol, depth, callback)
 
     # --- Temel Metrikler ---
@@ -664,7 +632,6 @@ class BinanceClient:
         return liquidity * (1 + imbalance)
 
     async def pro_metrics_aggregator(self, symbol: str) -> Dict[str, Any]:
-        """Tüm pro metrikleri tek bir çağrıda toplar"""
         results = await asyncio.gather(
             self.spread(symbol),
             self.liquidity_score(symbol),
@@ -675,7 +642,6 @@ class BinanceClient:
             return_exceptions=True
         )
         
-        # Handle exceptions
         metrics = {}
         metric_names = ["spread", "liquidity", "whale_momentum", "taker_ratio", "vwap_depth_score", "liquidity_imbalance"]
         
@@ -690,7 +656,6 @@ class BinanceClient:
 
     # --- Health Check ve Monitoring ---
     async def health_check(self) -> Dict[str, Any]:
-        """Sistem sağlık durumunu kontrol eder."""
         return {
             "http_metrics": self.get_http_metrics().__dict__,
             "ws_metrics": self.get_ws_metrics().__dict__,
@@ -704,7 +669,9 @@ class BinanceClient:
                 "failure_count": binance_circuit_breaker.failure_count,
                 "last_failure_time": binance_circuit_breaker.last_failure_time
             },
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "user_id": self.user_id,
+            "has_api_keys": bool(self.http.api_key and self.http.secret_key)
         }
 
     # --- Utils ---
@@ -714,7 +681,6 @@ class BinanceClient:
         return {s: r for s, r in zip(symbols, results)}
 
     async def close(self):
-        """Cleanup resources"""
         await self.ws_manager.close_all()
         await self.http.close()
 
@@ -729,29 +695,34 @@ class BinanceClient:
         self.ws_manager.reset_metrics()
 
 # -------------------------------------------------------------
-# Global Health Check Fonksiyonu
+# Kullanıcı bazlı / Global fallback
 # -------------------------------------------------------------
-async def health_check() -> Dict[str, Any]:
-    """Sistem sağlık durumunu kontrol eder."""
-    client = get_binance_api()
-    return await client.health_check()
+def get_binance_client(user_id: Optional[int] = None) -> BinanceClient:
+    api_key, secret_key = None, None
+    
+    if user_id:
+        creds = get_apikey(user_id)
+        if creds and ":" in creds:
+            api_key, secret_key = creds.split(":", 1)
+    
+    if not api_key or not secret_key:
+        api_key = CONFIG.BINANCE.API_KEY
+        secret_key = CONFIG.BINANCE.SECRET_KEY
+    
+    return BinanceClient(api_key, secret_key, user_id)
 
 # -------------------------------------------------------------
-# Singleton instance güvenli oluşturma
+# Singleton instance
 # -------------------------------------------------------------
 binance_api: BinanceClient | None = None
 
-def get_binance_api() -> BinanceClient:
-    """
-    Singleton erişim. Eğer loop yoksa burada yaratılır.
-    """
+def get_binance_api(user_id: Optional[int] = None) -> BinanceClient:
     global binance_api
     if binance_api is None:
-        binance_api = BinanceClient()
+        binance_api = get_binance_client(user_id)
     return binance_api
 
 async def cleanup_binance_api():
-    """Cleanup resources on application shutdown"""
     global binance_api
     if binance_api:
         await binance_api.close()
