@@ -9,9 +9,20 @@ import asyncio
 import logging
 from utils.config import CONFIG
 from utils.binance_api import get_binance_api
-from utils.db import get_user_api_keys  # <- user_id ile key çekmek için (örnek fonksiyon)
+from utils.apikey_utils import get_apikey  # <- gerçek kullanıcı API key erişimi
 
 LOG = logging.getLogger("worker_a")
+
+
+def get_user_api_keys(user_id: str) -> dict:
+    """
+    Veritabanından user_id'ye karşılık gelen Binance API key ve secret'ı çeker.
+    Dönüş: {"api_key": "xxx", "secret_key": "yyy"} veya boş dict
+    """
+    api_key, secret_key = get_apikey(int(user_id))
+    if api_key and secret_key:
+        return {"api_key": api_key, "secret_key": secret_key}
+    return {}
 
 
 class WorkerA:
@@ -35,7 +46,7 @@ class WorkerA:
         """
         if user_id:
             user_keys = get_user_api_keys(user_id)
-            if user_keys and user_keys.get("api_key") and user_keys.get("secret_key"):
+            if user_keys:
                 LOG.info(f"WorkerA: User-specific API keys loaded for user_id={user_id}")
                 return get_binance_api(
                     api_key=user_keys["api_key"],
