@@ -1,19 +1,21 @@
-##keep_alive.py
+# keep_alive.py
+"""
+Mini HTTP server to keep Render free-tier service alive.
+Port 10000 → Render assigns automatically via PORT env.
+"""
 
-from flask import Flask
-import threading
 import os
+from aiohttp import web
 
-app = Flask(__name__)
+async def handle(request):
+    return web.Response(text="Bot is running ✅")
 
-@app.route("/")
-def home():
-    return "Bot is alive ✅"
+async def start_keepalive():
+    app = web.Application()
+    app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-def run():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-def keep_alive():
-    t = threading.Thread(target=run)
-    t.daemon = True
-    t.start()
+    port = int(os.getenv("PORT", 10000))  # Render default PORT
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
