@@ -1,7 +1,6 @@
-#apikey_utils.py
-# alarm+trade+şifreleme 
-# encryption_utils.py ile şifreleme 
-
+# utils/apikey_utils.py
+# Kullanıcı bazlı API Key + Secret + Alarm + Trade ayarları
+# encryption_utils.py ile şifreleme
 
 import sqlite3
 import os
@@ -15,11 +14,13 @@ os.makedirs("data", exist_ok=True)
 def get_connection():
     return sqlite3.connect(DB_PATH)
 
+# --- Tablo oluşturma ---
 with get_connection() as conn:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS apikeys (
             user_id INTEGER PRIMARY KEY,
             api_key TEXT,
+            secret_key TEXT,
             alarm_settings TEXT,
             trade_settings TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -35,33 +36,37 @@ with get_connection() as conn:
     """)
 
 # ----------------- API KEY -----------------
-def add_or_update_apikey(user_id: int, api_key: str):
-    encrypted = encrypt_text(api_key)
+def add_or_update_apikey(user_id: int, api_key: str, secret_key: str):
+    enc_api = encrypt_text(api_key)
+    enc_secret = encrypt_text(secret_key)
     with get_connection() as conn:
         conn.execute("""
-            INSERT INTO apikeys (user_id, api_key)
-            VALUES (?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET api_key=excluded.api_key
-        """, (user_id, encrypted))
+            INSERT INTO apikeys (user_id, api_key, secret_key)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE 
+            SET api_key=excluded.api_key,
+                secret_key=excluded.secret_key
+        """, (user_id, enc_api, enc_secret))
         conn.commit()
 
 def get_apikey(user_id: int):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT api_key FROM apikeys WHERE user_id = ?", (user_id,)
+            "SELECT api_key, secret_key FROM apikeys WHERE user_id = ?", (user_id,)
         ).fetchone()
-        return decrypt_text(row[0]) if row and row[0] else None
+        if row and row[0] and row[1]:
+            return decrypt_text(row[0]), decrypt_text(row[1])
+        return None, None
 
 # ----------------- ALARM AYARLARI -----------------
 def set_alarm_settings(user_id: int, settings: dict):
-    settings_json = json.dumps(settings)
-    encrypted = encrypt_text(settings_json)
+    enc = encrypt_text(json.dumps(settings))
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO apikeys (user_id, alarm_settings)
             VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET alarm_settings=excluded.alarm_settings
-        """, (user_id, encrypted))
+        """, (user_id, enc))
         conn.commit()
 
 def get_alarm_settings(user_id: int):
@@ -73,14 +78,13 @@ def get_alarm_settings(user_id: int):
 
 # ----------------- TRADE AYARLARI -----------------
 def set_trade_settings(user_id: int, settings: dict):
-    settings_json = json.dumps(settings)
-    encrypted = encrypt_text(settings_json)
+    enc = encrypt_text(json.dumps(settings))
     with get_connection() as conn:
         conn.execute("""
             INSERT INTO apikeys (user_id, trade_settings)
             VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET trade_settings=excluded.trade_settings
-        """, (user_id, encrypted))
+        """, (user_id, enc))
         conn.commit()
 
 def get_trade_settings(user_id: int):
@@ -92,19 +96,14 @@ def get_trade_settings(user_id: int):
 
 # ----------------- ALARM İŞLEMLERİ -----------------
 def add_alarm(user_id: int, alarm_data: dict):
-    encrypted = encrypt_text(json.dumps(alarm_data))
+    enc = encrypt_text(json.dumps(alarm_data))
     with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO alarms (user_id, alarm_data) VALUES (?, ?)",
-            (user_id, encrypted)
-        )
+        conn.execute("INSERT INTO alarms (user_id, alarm_data) VALUES (?, ?)", (user_id, enc))
         conn.commit()
 
 def get_alarms(user_id: int):
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT id, alarm_data FROM alarms WHERE user_id = ?", (user_id,)
-        ).fetchall()
+        rows = conn.execute("SELECT id, alarm_data FROM alarms WHERE user_id = ?", (user_id,)).fetchall()
         return [{"id": r[0], "data": json.loads(decrypt_text(r[1]))} for r in rows]
 
 def delete_alarm(alarm_id: int):
@@ -116,15 +115,11 @@ def delete_alarm(alarm_id: int):
 def cleanup_old_alarms(days: int = 60):
     cutoff_date = datetime.now() - timedelta(days=days)
     with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM alarms WHERE created_at < ?", (cutoff_date,)
-        )
+        conn.execute("DELETE FROM alarms WHERE created_at < ?", (cutoff_date,))
         conn.commit()
 
 def cleanup_old_apikeys(days: int = 365):
     cutoff_date = datetime.now() - timedelta(days=days)
     with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM apikeys WHERE created_at < ?", (cutoff_date,)
-        )
+        conn.execute("DELETE FROM apikeys WHERE created_at < ?", (cutoff_date,))
         conn.commit()
