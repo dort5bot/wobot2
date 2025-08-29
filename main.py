@@ -3,6 +3,8 @@
 Production-ready main.py for WorkerA→WorkerB→WorkerC chain + Telegram bot
 Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
 Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
+keep_alive.py eklendi ve main.py içinde asyncio.create_task(start_keepalive()) çağrıldı.
+    Render seni web service olarak görecek → UptimeRobot GET / ping attığında bot hep uyanık kalacak.
 """
 
 import os
@@ -22,6 +24,9 @@ from utils.config import CONFIG
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
+
+# 🔹 Keep-alive import
+from keep_alive import start_keepalive
 
 # -----------------------------
 # Patch mevcut event loop
@@ -72,6 +77,10 @@ async def stop_worker(worker, name: str):
 async def main():
     LOG.info("Boot sequence started")
     init_db()
+
+    # 🔹 HTTP keep-alive başlat
+    asyncio.create_task(start_keepalive())
+    LOG.info("Keep-alive server started")
 
     token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
