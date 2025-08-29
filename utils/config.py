@@ -18,6 +18,7 @@ Bu eklemeler sistemin daha robust ve configurable olmasını sağlayacaktır.
 from __future__ import annotations
 
 import os
+import logging  # <-- Bu satır eksikti, eklendi
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
@@ -208,3 +209,4 @@ def update_binance_config(**kwargs):
             setattr(CONFIG.BINANCE, k, v)
         else:
             raise AttributeError(f"BinanceConfig parametresi bulunamadı: {k}")
+
