@@ -1,9 +1,9 @@
 # jobs/worker_a.py
 '''
 WorkerA class'ında kullanılacak BinanceClient nesnesi, duruma göre:
-✅ user_id verilirse: ilgili kullanıcının API key + secret bilgisi veritabanından çekilsin.
-✅ user_id verilmezse:.env'de tanımlı CONFIG.BINANCE.API_KEY varsa onu kullan.
-Yoksa → sadece public endpoint'ler desteklensin (örneğin WebSocket veya funding rate gibi public erişimli endpoint’ler çalışsın, auth isteyenler çalışmasın veya loglansın).
+user_id verilirse → veritabanından key + secret çekiyor
+Verilmezse → .env'deki CONFIG kullanılıyor
+O da yoksa → sadece public endpoint’lerle çalışıyor
 '''
 import asyncio
 import logging
