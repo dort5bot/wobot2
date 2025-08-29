@@ -109,10 +109,10 @@ class TAConfig:
     OPEN_INTEREST_ENABLED: bool = os.getenv("OPEN_INTEREST_ENABLED", "true").lower() == "true"
     FUNDING_RATE_ENABLED: bool = os.getenv("FUNDING_RATE_ENABLED", "true").lower() == "true"
     SOCIAL_SENTIMENT_ENABLED: bool = os.getenv("SOCIAL_SENTIMENT_ENABLED", "false").lower() == "true"
-    PIPELINE_INTERVAL = 60  # seconds    worker_d.py
-    MIN_DATA_POINTS = 20    # worker_d.py
-    CACHE_TTL = 300        # worker_d.py
-    SYMBOLS = ["BTCUSDT", "ETHUSDT"]  # İzlenecek semboller worker_d.py
+    TA_CACHE_TTL = 300          # TA için 5 dakika    worker_d.py 4 satır
+    TA_PIPELINE_INTERVAL = 60   # 1 dakika interval
+    TA_MIN_DATA_POINTS = 20     # Minimum 20 data point
+    TA_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "TRXUSDT"]
 
     # Advanced alpha_ta & analysis params
     ALPHA_LONG_THRESHOLD: float = float(os.getenv("ALPHA_LONG_THRESHOLD", 0.6))
@@ -211,4 +211,5 @@ def update_binance_config(**kwargs):
             setattr(CONFIG.BINANCE, k, v)
         else:
             raise AttributeError(f"BinanceConfig parametresi bulunamadı: {k}")
+
 
