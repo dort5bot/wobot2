@@ -1,3 +1,6 @@
+wobot1 = robot1
+/README.md
+
 worker yapısına gecis
 
 
