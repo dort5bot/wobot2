@@ -3,6 +3,7 @@
 Kişisel API'lerle trade/alarm işlemleri yapan sınıf
 DB'den real-time API key çeker, cache'ler
 """
+
 import asyncio
 from typing import Optional, Dict
 from utils.binance_api import BinanceClient
@@ -29,10 +30,14 @@ class PersonalTrader:
                 return None
             
             # Yeni client oluştur ve cache'e ekle
-            client = BinanceClient(api_key, secret_key)
-            self.clients[user_id] = client
-            LOG.info(f"New client created for user {user_id}")
-            return client
+            try:
+                client = BinanceClient(api_key, secret_key)
+                self.clients[user_id] = client
+                LOG.info(f"New client created for user {user_id}")
+                return client
+            except Exception as e:
+                LOG.error(f"Client creation failed for user {user_id}: {e}")
+                return None
     
     async def execute_trade(self, user_id: int, trade_data: dict):
         """Kişisel trade işlemi"""
@@ -49,6 +54,14 @@ class PersonalTrader:
             raise Exception("❌ Lütfen önce /apikey ile API key ekleyin")
         
         return await client.set_alarm(alarm_data)
+    
+    async def get_balance(self, user_id: int):
+        """Kişisel bakiye sorgulama"""
+        client = await self.get_client(user_id)
+        if not client:
+            raise Exception("❌ Lütfen önce /apikey ile API key ekleyin")
+        
+        return await client.get_account_balance()
 
 # Global instance
 personal_trader = PersonalTrader()
