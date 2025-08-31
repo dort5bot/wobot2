@@ -1,10 +1,4 @@
-'''
-├─ .github/
-│  └─ workflows/
-│      └─ ghcr_push.yml   <- buraya koyuyorsun
-'''
-
-
+# .github/workflows/ghcr_push.yml
 name: Build, Push to GHCR & Deploy to Render
 
 on:
