@@ -1,5 +1,4 @@
-# .github/workflows/ghcr_push.yml
-name: Build, Push to GHCR & Deploy to Render
+name: Build, Push to GHCR & Deploy to Render  # .github/workflows/ghcr_push.yml
 
 on:
   push:
