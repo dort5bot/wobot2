@@ -8,5 +8,6 @@ Worker sınıflarını merkezi import ile kolay erişim sağlar.
 from .worker_a import WorkerA
 from .worker_b import WorkerB
 from .worker_c import WorkerC
+from .worker_d import WorkerD
 
-__all__ = ["WorkerA", "WorkerB", "WorkerC"]
+__all__ = ["WorkerA", "WorkerB", "WorkerC", "WorkerD"]
