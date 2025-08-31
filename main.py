@@ -4,7 +4,11 @@ Production-ready main.py for WorkerA→WorkerB→WorkerC→WorkerD chain + Teleg
 Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
 Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
 keep_alive.py eklendi ve main.py içinde asyncio.create_task(start_keepalive()) çağrıldı.
-    Render seni web service olarak görecek → UptimeRobot GET / ping attığında bot hep uyanık kalacak.
+Render seni web service olarak görecek → UptimeRobot GET / ping attığında bot hep uyanık kalacak.
+"""
+# main.py
+"""
+Production-ready main.py - YENİ MİMARİ UYUMLU
 """
 
 import os
@@ -24,9 +28,10 @@ from utils.config import CONFIG
 from jobs.worker_a import WorkerA
 from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
-from jobs.worker_d import WorkerD   # 🔹 WorkerD eklendi
+from jobs.worker_d import WorkerD
 
-# 🔹 Keep-alive import
+# 🔹 Yeni import
+from utils.personal_trader import personal_trader
 from keep_alive import start_keepalive
 
 # -----------------------------
@@ -41,9 +46,10 @@ configure_logging(logging.INFO)
 LOG = logging.getLogger("main")
 
 # -----------------------------
-# Worker setup
+# Worker setup - YENİ MİMARİ
 # -----------------------------
-async def setup_workers():
+def setup_workers():
+    """Tüm worker'ları aynı event loop'da oluştur"""
     queue_raw = asyncio.Queue()
     worker_a = WorkerA(queue_raw)
     worker_c = WorkerC()
@@ -86,15 +92,18 @@ async def stop_worker(worker, name: str):
         LOG.exception("Error stopping %s", name)
 
 # -----------------------------
-# Async Main
+# Async Main - YENİ MİMARİ
 # -----------------------------
 async def main():
-    LOG.info("Boot sequence started")
+    LOG.info("Boot sequence started - YENİ MİMARİ")
     init_db()
 
     # 🔹 HTTP keep-alive başlat
     asyncio.create_task(start_keepalive())
     LOG.info("Keep-alive server started")
+
+    # 🔹 PersonalTrader initialized
+    LOG.info("PersonalTrader initialized - Kişisel işlemler hazır")
 
     token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
@@ -108,7 +117,7 @@ async def main():
     load_handlers(app)
 
     # Workerları başlat
-    worker_a, worker_b, worker_c, worker_d = await setup_workers()
+    worker_a, worker_b, worker_c, worker_d = setup_workers()
     workers = [
         (worker_a, "WorkerA"),
         (worker_b, "WorkerB"),
@@ -136,9 +145,17 @@ async def main():
     LOG.info("All workers started")
 
     # -----------------------------
-    # Start Telegram polling (tek satır)
+    # Start Telegram polling with error handling
     # -----------------------------
-    polling_task = asyncio.create_task(app.run_polling(close_loop=False))
+    async def polling_wrapper():
+        try:
+            await app.run_polling(close_loop=False, drop_pending_updates=True)
+        except Exception as e:
+            LOG.error(f"Polling error: {e}")
+            # Hata durumunda graceful shutdown
+            stop_event.set()
+
+    polling_task = asyncio.create_task(polling_wrapper())
     LOG.info("Polling started")
 
     # Wait for shutdown signal
@@ -153,11 +170,16 @@ async def main():
     # Stop workers
     await asyncio.gather(*(stop_worker(w, n) for w, n in workers))
 
-    LOG.info("All systems stopped")
+    LOG.info("All systems stopped - YENİ MİMARİ")
 
 # -----------------------------
 # Entry point
 # -----------------------------
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    try:
+        # Modern asyncio.run kullan
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        LOG.info("Keyboard interrupt received")
+    except Exception as e:
+        LOG.exception(f"Unexpected error: {e}")
