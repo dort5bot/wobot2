@@ -3,7 +3,7 @@
 # /dar      -> Dosya ağacı (mesaj, uzun olursa TXT)
 # /dar Z    -> ZIP (tree.txt + içerikler, sadece listelenen dosyalar + .env + .gitignore)
 # /dar k    -> alfabetik sirali komut listesi + varsa eşleştirme handlers/command_info.py
-# dosya adi .env den alir TELEGRAM_BOT_NAME
+# dosya adi .env den alir BOT_NAME
 import os
 import re
 import zipfile
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from handlers.command_info import COMMAND_INFO  # ✅ komut açıklamaları import edildi
 
 load_dotenv()  # .env dosyasını yükle
-TELEGRAM_BOT_NAME = os.getenv("TELEGRAM_BOT_NAME", "xbot")  # .env varsa bot adı, yoksa "xbot"
+BOT_NAME = os.getenv("BOT_NAME", "xbot")  # .env varsa bot adı, yoksa "xbot"
 
 ROOT_DIR = '.'
 TELEGRAM_MSG_LIMIT = 4000
@@ -150,7 +150,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%m%d_%H%M%S")
 
     if mode.upper() == "Z":
-        zip_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.zip"
+        zip_filename = f"{BOT_NAME}_{timestamp}.zip"
         try:
             create_zip_with_tree_and_files(ROOT_DIR, zip_filename)
             with open(zip_filename, "rb") as f:
@@ -164,7 +164,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Uzun mesajları segmentlere böl
     if len(tree_text) > TELEGRAM_MSG_LIMIT:
-        txt_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.txt"
+        txt_filename = f"{BOT_NAME}_{timestamp}.txt"
         try:
             with open(txt_filename, 'w', encoding='utf-8') as f:
                 f.write(tree_text)
