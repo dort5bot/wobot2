@@ -1,4 +1,4 @@
-#render.yaml
+# render.yaml
 services:
   - type: web
     name: telegram-trading-bot
@@ -11,3 +11,7 @@ services:
         value: 10000
       - key: PYTHON_VERSION
         value: 3.11.0
+      - key: BINANCE_API_KEY
+        value: your_global_api_key_here
+      - key: BINANCE_SECRET_KEY  
+        value: your_global_secret_key_here
