@@ -1,12 +1,4 @@
-# main.py
-"""
-Production-ready main.py for WorkerA→WorkerB→WorkerC→WorkerD chain + Telegram bot
-Adapted for Render / nest_asyncio / python-telegram-bot v20+ environments
-Shutdown signal, worker lifecycle ve polling yapısı 3.11/3.13 uyumlu.
-keep_alive.py eklendi ve main.py içinde asyncio.create_task(start_keepalive()) çağrıldı.
-Render seni web service olarak görecek → UptimeRobot GET / ping attığında bot hep uyanık kalacak.
-"""
-# main.py
+# main.py (YENİ - BU YÜKLENECEK)
 """
 Production-ready main.py - YENİ MİMARİ UYUMLU
 """
@@ -30,7 +22,7 @@ from jobs.worker_b import WorkerB
 from jobs.worker_c import WorkerC
 from jobs.worker_d import WorkerD
 
-# 🔹 Yeni import
+# 🔹 Yeni import - PERSONAL TRADER EKLENDİ
 from utils.personal_trader import personal_trader
 from keep_alive import start_keepalive
 
@@ -102,7 +94,7 @@ async def main():
     asyncio.create_task(start_keepalive())
     LOG.info("Keep-alive server started")
 
-    # 🔹 PersonalTrader initialized
+    # 🔹 PersonalTrader initialized - YENİ EKLENDİ
     LOG.info("PersonalTrader initialized - Kişisel işlemler hazır")
 
     token = CONFIG.TELEGRAM.BOT_TOKEN or os.getenv("TELEGRAM_BOT_TOKEN")
@@ -145,7 +137,7 @@ async def main():
     LOG.info("All workers started")
 
     # -----------------------------
-    # Start Telegram polling with error handling
+    # Start Telegram polling with error handling - İYİLEŞTİRİLDİ
     # -----------------------------
     async def polling_wrapper():
         try:
@@ -173,11 +165,11 @@ async def main():
     LOG.info("All systems stopped - YENİ MİMARİ")
 
 # -----------------------------
-# Entry point
+# Entry point - MODERN YAPI
 # -----------------------------
 if __name__ == "__main__":
     try:
-        # Modern asyncio.run kullan
+        # Modern asyncio.run kullan - DEĞİŞTİ
         asyncio.run(main())
     except KeyboardInterrupt:
         LOG.info("Keyboard interrupt received")
