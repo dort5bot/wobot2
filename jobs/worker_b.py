@@ -5,6 +5,7 @@
 # - Backpressure: işlem kuyruğu maxsize ile; dolarsa paket düşür
 # - Per-symbol lock: aynı sembolde eşzamanlı yazma/okuma güvenli
 # - Sinyal üretici: utils.ta_utils.generate_signals(df)
+
 import asyncio
 import logging
 import time
@@ -13,7 +14,6 @@ from typing import Dict, Tuple, Optional
 import pandas as pd
 
 from utils import ta_utils
-from utils import config_worker as CWORKER
 from utils.config import CONFIG
 
 LOG = logging.getLogger("worker_b")
@@ -36,10 +36,10 @@ class WorkerB:
         self.cooldown = getattr(CONFIG.BOT, "SIGNAL_COOLDOWN", 60)
         self.history_len = getattr(CONFIG.TA, "HISTORY_WINDOW", 500)
         self.min_candles = getattr(CONFIG.TA, "MIN_CANDLES_FOR_SIGNALS", 50)
-        self.interval = getattr(CWORKER, "WORKER_B_INTERVAL", 5)
+        self.interval = getattr(CONFIG.WORKER, "WORKER_B_INTERVAL", 5)
 
-        self.num_workers = getattr(CWORKER, "WORKER_B_WORKERS", 3)
-        self.proc_maxsize = getattr(CWORKER, "WORKER_B_PROC_MAXSIZE", 2000)
+        self.num_workers = getattr(CONFIG.WORKER, "WORKER_B_WORKERS", 3)
+        self.proc_maxsize = getattr(CONFIG.WORKER, "WORKER_B_PROC_MAXSIZE", 2000)
         self.proc_q: asyncio.Queue[KlinePack] = asyncio.Queue(maxsize=self.proc_maxsize)
 
     async def start_async(self):
