@@ -1,4 +1,4 @@
-# utils/binance_api.py - BÖLÜM 1/2
+# utils/binance_api.py
 ''' 
 Binance HTTP & WebSocket client (async) - Gelişmiş Sürüm
 Kullanıcı bazlı API key desteği ile entegre edilmiştir.
@@ -361,14 +361,16 @@ def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
 # -------------------------------------------------------------
 # BinanceClient Wrapper
 # -------------------------------------------------------------
+# utils/binance_api.py - Sadece küçük iyileştirme
 class BinanceClient:
-    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None, user_id: Optional[int] = None):
-        self.user_id = user_id
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
+        # user_id parametresini KALDIRıldı (artık gerek yok)
         self.api_key = api_key
         self.secret_key = secret_key
-        self.http = BinanceHTTPClient(self.api_key, self.secret_key, self.user_id)
+        self.http = BinanceHTTPClient(self.api_key, self.secret_key)
         self.ws_manager = BinanceWebSocketManager()
 
+        # Event loop handling iyileştirme
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -376,7 +378,9 @@ class BinanceClient:
             asyncio.set_event_loop(self.loop)
 
     def test_connection(self):
-        LOG.info(f"Binance client initialized for user_id: {self.user_id}, has_keys: {bool(self.http.api_key and self.http.secret_key)}")
+        # user_id log'unu KALDIRıldı
+        has_keys = bool(self.api_key and self.secret_key)
+        LOG.info(f"Binance client initialized, has_keys: {has_keys}")
         return True
 
     # ---------------------------------------------------------
@@ -727,3 +731,4 @@ async def cleanup_binance_api():
     if binance_api:
         await binance_api.close()
         binance_api = None
+
