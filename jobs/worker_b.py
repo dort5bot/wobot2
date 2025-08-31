@@ -18,21 +18,16 @@ from utils.config import CONFIG
 
 LOG = logging.getLogger("worker_b")
 
+# KlinePack: (symbol, ts, open, high, low, close, volume)
 KlinePack = Tuple[str, pd.Timestamp, float, float, float, float, float]
+
 
 class WorkerB:
     def __init__(self, queue: asyncio.Queue, signal_callback=None):
         self.in_q = queue
         self.signal_callback = signal_callback
 
-        self._candles: Dict[str, deque] = {}
-        self._last_signal_ts: Dict[str, float] = {}
-        self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-
-        self._running = False
-        self._consumer_task: Optional[asyncio.Task] = None
-        self._worker_tasks: list[asyncio.Task] = []
-
+        # Konfigürasyondan parametreler
         self.cooldown = getattr(CONFIG.BOT, "SIGNAL_COOLDOWN", 60)
         self.history_len = getattr(CONFIG.TA, "HISTORY_WINDOW", 500)
         self.min_candles = getattr(CONFIG.TA, "MIN_CANDLES_FOR_SIGNALS", 50)
@@ -42,13 +37,22 @@ class WorkerB:
         self.proc_maxsize = getattr(CONFIG.WORKER, "WORKER_B_PROC_MAXSIZE", 2000)
         self.proc_q: asyncio.Queue[KlinePack] = asyncio.Queue(maxsize=self.proc_maxsize)
 
+        # defaultdict ile otomatik deque oluşturma
+        self._candles: Dict[str, deque] = defaultdict(lambda: deque(maxlen=self.history_len))
+        self._last_signal_ts: Dict[str, float] = {}
+        self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+        self._running = False
+        self._consumer_task: Optional[asyncio.Task] = None
+        self._worker_tasks: list[asyncio.Task] = []
+
     async def start_async(self):
         if self._running:
             return
         self._running = True
         self._consumer_task = asyncio.create_task(self._consumer(), name="worker_b_consumer")
         self._worker_tasks = [
-            asyncio.create_task(self._worker_loop(i), name=f"worker_b_worker_{i}") 
+            asyncio.create_task(self._worker_loop(i), name=f"worker_b_worker_{i}")
             for i in range(self.num_workers)
         ]
         LOG.info("WorkerB started (workers=%s, proc_maxsize=%s)", self.num_workers, self.proc_maxsize)
@@ -73,6 +77,7 @@ class WorkerB:
         LOG.info("WorkerB stopped")
 
     async def _consumer(self):
+        """Gelen kline mesajlarını işleme kuyruğuna alır"""
         try:
             while self._running:
                 try:
@@ -114,6 +119,7 @@ class WorkerB:
             LOG.info("WorkerB consumer cancelled")
 
     async def _worker_loop(self, wid: int):
+        """İşçi thread'i: kline'ları işler ve sinyal üretir"""
         try:
             while self._running:
                 try:
@@ -124,38 +130,59 @@ class WorkerB:
                 try:
                     symbol, ts, o, h, l, c, v = pack
                     lock = self._locks[symbol]
+                    
                     async with lock:
-                        dq = self._candles.get(symbol)
-                        if dq is None:
-                            dq = deque(maxlen=self.history_len)
-                            self._candles[symbol] = dq
-                        dq.append((ts, o, h, l, c, v))
+                        # defaultdict sayesinde otomatik olarak deque oluşur
+                        dq = self._candles[symbol]
+                        dq.append({
+                            "ts": ts,
+                            "open": o,
+                            "high": h,
+                            "low": l,
+                            "close": c,
+                            "volume": v,
+                        })
 
+                        # Minimum mum sayısına ulaşmadan sinyal üretme
                         if len(dq) < self.min_candles:
                             continue
 
-                        df = pd.DataFrame(
-                            list(dq), 
-                            columns=["ts", "open", "high", "low", "close", "volume"]
-                        ).set_index("ts")
+                        # DataFrame oluştur (dict'lerden otomatik column isimleri alınır)
+                        df = pd.DataFrame(list(dq)).set_index("ts")
 
+                        # Teknik analiz sinyallerini üret
                         sig_res = ta_utils.generate_signals(df)
                         signal_val = sig_res.get("signal", 0)
                         score = float(sig_res.get("score", 0.0))
                         alpha_score = sig_res.get("alpha_ta", {}).get("score", 0.0)
 
+                        # Cooldown kontrolü ve sinyal gönderimi
                         now = time.time()
-                        if signal_val != 0 and (now - self._last_signal_ts.get(symbol, 0)) >= self.cooldown:
+                        last_signal_ts = self._last_signal_ts.get(symbol, 0)
+                        
+                        if signal_val != 0 and (now - last_signal_ts) >= self.cooldown:
                             side = "BUY" if signal_val == 1 else "SELL"
                             decision = {
-                                "symbol": symbol, "side": side,
-                                "score": score, "alpha_score": alpha_score,
+                                "symbol": symbol, 
+                                "side": side,
+                                "score": score, 
+                                "alpha_score": alpha_score,
                                 "indicators": sig_res.get("indicators", {}),
+                                "timestamp": ts.isoformat(),
                             }
+                            
                             if self.signal_callback:
-                                await self.signal_callback("ta_utils", symbol, side, strength=abs(score), payload=decision)
+                                await self.signal_callback(
+                                    "ta_utils", symbol, side, 
+                                    strength=abs(score), 
+                                    payload=decision
+                                )
+                            
                             self._last_signal_ts[symbol] = now
-                            LOG.info("[W%s] Signal %s %s score=%.3f alpha=%.3f", wid, symbol, side, score, alpha_score)
+                            LOG.info(
+                                "[W%s] Signal %s %s @ %s score=%.3f alpha=%.3f",
+                                wid, symbol, side, ts, score, alpha_score
+                            )
 
                 except Exception:
                     LOG.exception("WorkerB worker error (id=%s)", wid)
@@ -167,3 +194,13 @@ class WorkerB:
 
         except asyncio.CancelledError:
             LOG.info("WorkerB worker cancelled (id=%s)", wid)
+
+    def get_stats(self) -> Dict:
+        """Çalışma istatistiklerini döndürür"""
+        return {
+            "running": self._running,
+            "candle_symbols": len(self._candles),
+            "proc_q_size": self.proc_q.qsize(),
+            "in_q_size": self.in_q.qsize(),
+            "workers_active": len([t for t in self._worker_tasks if not t.done()]),
+        }
