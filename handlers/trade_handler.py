@@ -1,4 +1,6 @@
 # handlers/trade_handler.py
+# Alarm/Trade Handler'ları
+# handlers/trade_handler.py
 from utils.personal_trader import personal_trader
 
 async def buy(update, context):
