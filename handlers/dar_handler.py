@@ -1,9 +1,11 @@
 # handlers/dar_handler.py
 # --------------------------------
-# /dar      -> Dosya ağacı (mesaj, uzun olursa TXT)
-# /dar Z    -> ZIP (tree.txt + içerikler, sadece listelenen dosyalar + .env + .gitignore)
-# /dar k    -> alfabetik sirali komut listesi + varsa eşleştirme handlers/command_info.py
+# /dar      → Dosya ağacı (mesaj, uzun olursa TXT)
+# /dar Z    → ZIP (tree.txt + içerikler, sadece listelenen dosyalar + .env + .gitignore)
+# /dar k    → Alfabetik komut listesi (+ açıklamalar)
+# /dar txt  → Projedeki tüm geçerli dosyaların içeriği tek bir .txt dosyada
 # dosya adi .env den alir TELEGRAM_BOT_NAME
+
 import os
 import re
 import zipfile
@@ -146,8 +148,34 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"<pre>{text}</pre>", parse_mode="HTML")
         return
 
-    tree_text, _ = format_tree(ROOT_DIR)
-    timestamp = datetime.now().strftime("%m%d_%H%M%S")
+    tree_text, valid_files = format_tree(ROOT_DIR)
+    timestamp = datetime.now().strftime("%m%d_%H%M")
+
+    if mode == "txt":
+        txt_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.txt"
+        try:
+            with open(txt_filename, 'w', encoding='utf-8') as out:
+                for filepath in valid_files:
+                    rel_path = os.path.relpath(filepath, ROOT_DIR)
+                    # Daha belirgin ayraçlar
+                    separator = "=" * (len(rel_path) + 4)  # +4 ekstra eşittir işareti
+                    out.write(f"\n{separator}\n")
+                    out.write(f"|| {rel_path} ||\n")
+                    out.write(f"{separator}\n\n")
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            out.write(f.read())
+                    except Exception as e:
+                        out.write(f"<HATA: {e}>\n")
+                    out.write("\n\n")
+            with open(txt_filename, 'rb') as f:
+                await update.message.reply_document(document=f, filename=txt_filename)
+        except Exception as e:
+            await update.message.reply_text(f"Hata oluştu: {e}")
+        finally:
+            if os.path.exists(txt_filename):
+                os.remove(txt_filename)
+        return
 
     if mode.upper() == "Z":
         zip_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.zip"
@@ -162,7 +190,6 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(zip_filename)
         return
 
-    # Uzun mesajları segmentlere böl
     if len(tree_text) > TELEGRAM_MSG_LIMIT:
         txt_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.txt"
         try:
@@ -177,8 +204,8 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(txt_filename)
         return
 
-    # Normal kısa mesaj
     await update.message.reply_text(f"<pre>{tree_text}</pre>", parse_mode="HTML")
+
 
 #--plugin loader---
 def register(app):
