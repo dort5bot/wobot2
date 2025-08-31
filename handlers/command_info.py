@@ -14,7 +14,7 @@ COMMAND_INFO = {
     "p_sil": "Favori coin listesinden coin siler",
     "fr": "Funding Rate raporu ve günlük CSV kaydı",
     "whale": "Whale Alerts raporu ve günlük CSV kaydı",
-    "t":"/t →hazir liste, /t n →hacimli n coin, /t coin zaman →coin zaman bilgisi",
-    "etf":"wobot2 etf  → yok"
-    "misal":"oku",
+    "t": "/t →hazir liste, /t n →hacimli n coin, /t coin zaman →coin zaman bilgisi",
+    "etf": "wobot2 etf  → yok",
+    "komut": "tınak_içi_açıklama_ sonrasında VİRGÜL",
 }
