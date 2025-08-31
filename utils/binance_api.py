@@ -1,7 +1,6 @@
-# utils/binance_api.py
 ''' 
 Binance HTTP & WebSocket client (async) - Gelişmiş Sürüm
-Kullanıcı bazlı API key desteği ile entegre edilmiştir.
+YENİ MİMARİ: user_id parametresi KALDIRILDI
 '''
 
 import os
@@ -21,7 +20,6 @@ from dataclasses import dataclass
 from collections import defaultdict
 
 from utils.config import CONFIG
-from utils.apikey_utils import get_apikey
 
 # -------------------------------------------------------------
 # Logger
@@ -89,18 +87,12 @@ binance_circuit_breaker = CircuitBreaker(
 # HTTP Katmanı: Retry + Exponential Backoff + TTL Cache
 # -------------------------------------------------------------
 class BinanceHTTPClient:
-    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None, user_id: Optional[int] = None):
-        # Kullanıcı bazlı veya global API key'leri belirle
-        self.user_id = user_id
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
+        # 🔹 user_id parametresi KALDIRILDI
         self.api_key = api_key
         self.secret_key = secret_key
         
-        # Kullanıcı bazlı key yoksa global key'leri kullan
-        if not self.api_key or not self.secret_key:
-            self.api_key = CONFIG.BINANCE.API_KEY
-            self.secret_key = CONFIG.BINANCE.SECRET_KEY
-        
-        LOG.info(f"HTTP Client initialized for user_id: {user_id}, has_keys: {bool(self.api_key and self.secret_key)}")
+        LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
         
         self.client = httpx.AsyncClient(
             base_url=CONFIG.BINANCE.BASE_URL, 
@@ -359,12 +351,11 @@ def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
     return df[['open', 'high', 'low', 'close', 'volume']]
 
 # -------------------------------------------------------------
-# BinanceClient Wrapper
+# BinanceClient Wrapper - YENİ MİMARİ
 # -------------------------------------------------------------
-# utils/binance_api.py - Sadece küçük iyileştirme
 class BinanceClient:
     def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
-        # user_id parametresini KALDIRıldı (artık gerek yok)
+        # 🔹 user_id parametresi TAMAMEN KALDIRILDI
         self.api_key = api_key
         self.secret_key = secret_key
         self.http = BinanceHTTPClient(self.api_key, self.secret_key)
@@ -378,7 +369,6 @@ class BinanceClient:
             asyncio.set_event_loop(self.loop)
 
     def test_connection(self):
-        # user_id log'unu KALDIRıldı
         has_keys = bool(self.api_key and self.secret_key)
         LOG.info(f"Binance client initialized, has_keys: {has_keys}")
         return True
@@ -674,7 +664,6 @@ class BinanceClient:
                 "last_failure_time": binance_circuit_breaker.last_failure_time
             },
             "timestamp": time.time(),
-            "user_id": self.user_id,
             "has_api_keys": bool(self.http.api_key and self.http.secret_key)
         }
 
@@ -699,31 +688,25 @@ class BinanceClient:
         self.ws_manager.reset_metrics()
 
 # -------------------------------------------------------------
-# Kullanıcı bazlı / Global fallback
+# Kullanıcı bazlı / Global fallback - YENİ MİMARİ
 # -------------------------------------------------------------
-def get_binance_client(user_id: Optional[int] = None) -> BinanceClient:
-    api_key, secret_key = None, None
-    
-    if user_id:
-        creds = get_apikey(user_id)
-        if creds and ":" in creds:
-            api_key, secret_key = creds.split(":", 1)
-    
+def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] = None) -> BinanceClient:
+    # 🔹 user_id parametresi KALDIRILDI, direkt api_key/secret_key alıyor
     if not api_key or not secret_key:
         api_key = CONFIG.BINANCE.API_KEY
         secret_key = CONFIG.BINANCE.SECRET_KEY
     
-    return BinanceClient(api_key, secret_key, user_id)
+    return BinanceClient(api_key, secret_key)
 
 # -------------------------------------------------------------
-# Singleton instance
+# Singleton instance - YENİ MİMARİ
 # -------------------------------------------------------------
 binance_api: BinanceClient | None = None
 
-def get_binance_api(user_id: Optional[int] = None) -> BinanceClient:
+def get_binance_api() -> BinanceClient:
     global binance_api
     if binance_api is None:
-        binance_api = get_binance_client(user_id)
+        binance_api = get_binance_client()
     return binance_api
 
 async def cleanup_binance_api():
@@ -731,4 +714,3 @@ async def cleanup_binance_api():
     if binance_api:
         await binance_api.close()
         binance_api = None
-
