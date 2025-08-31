@@ -1,33 +1,35 @@
 # handlers/apikey_handler.py
-# Kullanıcı bazlı + global API Key, alarm ve trade ayarları
-# /apikey, /set_alarm, /get_alarm, /set_trade, /get_trade
-
+# Kullanıcı bazlı API Key, alarm ve trade ayarları
+# YENİ MİMARİ: Global API (.env) + Kişisel API (DB)
 
 from telegram.ext import CommandHandler
 from utils.apikey_utils import (
     add_or_update_apikey, get_apikey,
     set_alarm_settings, get_alarm_settings,
     set_trade_settings, get_trade_settings,
-    get_alarms, delete_alarm
+    get_alarms, delete_alarm,
+    add_alarm
 )
-from utils.config import CONFIG, update_binance_keys, ENV_PATH
-from dotenv import set_key, load_dotenv
-import os
+from utils.personal_trader import personal_trader
 import json
+import logging
 
-AUTHORIZED_USERS = [123456789]  # global key değiştirebilecek adminler
+LOG = logging.getLogger("apikey_handler")
 
 # --- Yardım: /api ---
 async def api_info(update, context):
     message = (
         "🔧 *API Komutları*\n\n"
-        "🔑 `/apikey <API_KEY> <SECRET_KEY>` → Yeni API key ekle\n"
-        "📋 `/apimy` → Kendi kayıtlı API key bilgilerini görüntüle\n"
-        "❌ `/apidel <numara>` → Belirtilen sıradaki API kaydını sil (örnek: /apidel 2)\n\n"
+        "🔑 `/apikey <API_KEY> <SECRET_KEY>` → Kişisel API key ekle\n"
+        "📋 `/apimy` → Kayıtlı API key bilgilerini görüntüle\n"
+        "❌ `/apidel` → API key'i sil\n\n"
         "⏰ `/set_alarm <JSON>` → Alarm ayarlarını belirle\n"
-        "📥 `/get_alarm` → Mevcut alarm ayarlarını görüntüle\n\n"
+        "📥 `/get_alarm` → Alarm ayarlarını görüntüle\n"
+        "📋 `/myalarms` → Aktif alarmları listele\n"
+        "🗑 `/delalarm <id>` → Alarm sil\n\n"
         "📊 `/set_trade <JSON>` → Trade ayarlarını belirle\n"
-        "📤 `/get_trade` → Mevcut trade ayarlarını görüntüle"
+        "📤 `/get_trade` → Trade ayarlarını görüntüle\n\n"
+        "💡 *Not:* Veri sorgulama için global API, kişisel işlemler için kişisel API kullanılır."
     )
     await update.message.reply_text(message, parse_mode="Markdown")
 
@@ -45,17 +47,20 @@ async def apikey(update, context):
     except:
         pass
 
+    # DB'ye kaydet
     add_or_update_apikey(user_id, api_key, secret_key)
-
-    if user_id in AUTHORIZED_USERS:
-        update_binance_keys(api_key, secret_key)
-        if os.path.exists(ENV_PATH):
-            set_key(ENV_PATH, "BINANCE_API_KEY", api_key)
-            set_key(ENV_PATH, "BINANCE_SECRET_KEY", secret_key)
-            load_dotenv(ENV_PATH, override=True)
-        await update.message.reply_text("✅ Global API Key güncellendi ve DB’ye kaydedildi.")
-    else:
-        await update.message.reply_text("🔑 API Key & Secret kullanıcı bazlı DB’ye kaydedildi.")
+    
+    # Cache'i temizle (yeni key ile yeniden oluşturulsun)
+    async with personal_trader.lock:
+        personal_trader.clients.pop(user_id, None)
+    
+    await update.message.reply_text(
+        "✅ API Key kaydedildi!\n\n"
+        "• *Veri sorgulama:* Global API\n"  
+        "• *Alarm/Trade:* Kişisel API\n\n"
+        "Artık kişisel işlemlerinizde kullanılacak.",
+        parse_mode="Markdown"
+    )
 
 # --- Kayıtlı API Key Bilgileri: /apimy ---
 async def apimy(update, context):
@@ -65,75 +70,97 @@ async def apimy(update, context):
         masked_api = f"{api_key[:4]}...{api_key[-4:]}"
         masked_secret = f"{secret_key[:4]}...{secret_key[-4:]}"
         await update.message.reply_text(
-            f"🔐 *Kayıtlı API Key*\nAPI: `{masked_api}`\nSECRET: `{masked_secret}`",
+            f"🔐 *Kayıtlı API Key*\n\nAPI: `{masked_api}`\nSECRET: `{masked_secret}`",
             parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text("📭 Kayıtlı bir API Key bulunamadı.")
+        await update.message.reply_text("📭 Kayıtlı bir API Key bulunamadı. /apikey ile ekleyin.")
 
-# --- API Key Silme: /apidel <numara> ---
+# --- API Key Silme: /apidel ---
 async def apidel(update, context):
     user_id = update.effective_user.id
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("Kullanım: /apidel <sıra_numarası> (örnek: /apidel 1)")
-        return
-
-    # Kullanıcının kayıtlı alarm listesi getirilir (çünkü çoklu alarm desteklenmiş ama apikey tekli)
-    api_key, secret_key = get_apikey(user_id)
-    if not api_key or not secret_key:
-        await update.message.reply_text("🗂 Hiç kayıtlı API Key bulunamadı.")
-        return
-
-    index = int(context.args[0])
-    if index != 1:
-        await update.message.reply_text("❌ Sadece 1 adet API key kaydı bulunuyor. Sıra numarası 1 olmalıdır.")
-        return
-
+    
     from utils.apikey_utils import get_connection
     with get_connection() as conn:
         conn.execute("DELETE FROM apikeys WHERE user_id = ?", (user_id,))
         conn.commit()
+    
+    # Cache'ten de sil
+    async with personal_trader.lock:
+        personal_trader.clients.pop(user_id, None)
+    
     await update.message.reply_text("🗑 API Key silindi.")
 
 # --- Alarm Ayarları ---
 async def set_alarm(update, context):
     user_id = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("Kullanım: /set_alarm <JSON>")
+        await update.message.reply_text("Kullanım: /set_alarm <JSON>\nÖrnek: /set_alarm {\"symbol\": \"BTCUSDT\", \"price\": 50000}")
         return
+    
     try:
         settings = json.loads(" ".join(context.args))
         set_alarm_settings(user_id, settings)
         await update.message.reply_text("⏰ Alarm ayarları kaydedildi.")
     except json.JSONDecodeError:
         await update.message.reply_text("❌ Geçersiz JSON formatı.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Hata: {str(e)}")
 
 async def get_alarm(update, context):
     user_id = update.effective_user.id
     settings = get_alarm_settings(user_id)
     if settings:
-        await update.message.reply_text(f"⏰ Alarm ayarları:\n{json.dumps(settings, indent=2)}")
+        await update.message.reply_text(f"⏰ Alarm ayarları:\n```json\n{json.dumps(settings, indent=2)}\n```", parse_mode="Markdown")
     else:
         await update.message.reply_text("ℹ️ Hiç alarm ayarı bulunamadı.")
+
+# --- Alarm Listeleme: /myalarms ---
+async def myalarms(update, context):
+    user_id = update.effective_user.id
+    alarms = get_alarms(user_id)
+    
+    if not alarms:
+        await update.message.reply_text("📭 Hiç aktif alarmınız yok.")
+        return
+    
+    message = "⏰ *Aktif Alarmlarınız*\n\n"
+    for alarm in alarms:
+        message += f"🆔 {alarm['id']}: {json.dumps(alarm['data'], ensure_ascii=False)}\n"
+    
+    await update.message.reply_text(message, parse_mode="Markdown")
+
+# --- Alarm Silme: /delalarm <id> ---
+async def delalarm(update, context):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Kullanım: /delalarm <alarm_id>\nÖrnek: /delalarm 1")
+        return
+    
+    alarm_id = int(context.args[0])
+    delete_alarm(alarm_id)
+    await update.message.reply_text(f"🗑 Alarm #{alarm_id} silindi.")
 
 # --- Trade Ayarları ---
 async def set_trade(update, context):
     user_id = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("Kullanım: /set_trade <JSON>")
+        await update.message.reply_text("Kullanım: /set_trade <JSON>\nÖrnek: /set_trade {\"max_amount\": 1000, \"risk_level\": \"medium\"}")
         return
+    
     try:
         settings = json.loads(" ".join(context.args))
         set_trade_settings(user_id, settings)
         await update.message.reply_text("📊 Trade ayarları kaydedildi.")
     except json.JSONDecodeError:
         await update.message.reply_text("❌ Geçersiz JSON formatı.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Hata: {str(e)}")
 
 async def get_trade(update, context):
     user_id = update.effective_user.id
     settings = get_trade_settings(user_id)
     if settings:
-        await update.message.reply_text(f"📊 Trade ayarları:\n{json.dumps(settings, indent=2)}")
+        await update.message.reply_text(f"📊 Trade ayarları:\n```json\n{json.dumps(settings, indent=2)}\n```", parse_mode="Markdown")
     else:
         await update.message.reply_text("ℹ️ Hiç trade ayarı bulunamadı.")
 
@@ -146,6 +173,8 @@ def register(application):
         CommandHandler("apidel", apidel),
         CommandHandler("set_alarm", set_alarm),
         CommandHandler("get_alarm", get_alarm),
+        CommandHandler("myalarms", myalarms),
+        CommandHandler("delalarm", delalarm),
         CommandHandler("set_trade", set_trade),
         CommandHandler("get_trade", get_trade)
     ]
