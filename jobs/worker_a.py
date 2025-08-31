@@ -1,15 +1,17 @@
 # jobs/worker_a.py
-'''
-WorkerA class'ında kullanılacak BinanceClient nesnesi, duruma göre:
-user_id verilirse → veritabanından key + secret çekiyor
-Verilmezse → .env'deki CONFIG kullanılıyor
-O da yoksa → sadece public endpoint’lerle çalışıyor
-'''
+"""
+WorkerA: Binance'den veri toplayıcı
+- Kline streamlerini queue'ya aktarır
+- Funding rate verilerini periyodik olarak alır ve queue'ya koyar
+- Funding / open interest gibi genel veriler her zaman .env içindeki global API key ile alınır
+- Kişisel API key sadece trade/alarmlar için kullanılacak (WorkerA’da devre dışı)
+"""
+
 import asyncio
 import logging
 from utils.config import CONFIG
-from utils.binance_api import get_binance_api
-from utils.apikey_utils import get_apikey  # <- gerçek kullanıcı API key erişimi
+from utils.binance_api import BinanceClient
+from utils.apikey_utils import get_apikey  # kullanıcı key erişimi
 
 LOG = logging.getLogger("worker_a")
 
@@ -26,44 +28,29 @@ def get_user_api_keys(user_id: str) -> dict:
 
 
 class WorkerA:
-    """
-    Worker A: Binance'den veri toplayıcı
-    - Kline streamlerini queue'ya aktarır
-    - Funding rate verilerini periyodik olarak alır ve queue'ya koyar
-    """
     def __init__(self, queue: asyncio.Queue, loop=None, user_id: str = None):
         self.queue = queue
         self.loop = loop or asyncio.get_event_loop()
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
-        # Akıllı API client oluşturma
-        self.client = self._init_binance_client(user_id)
+        # 🔹 Funding gibi ortak işler için global client
+        self.client = self._init_global_client()
 
-    def _init_binance_client(self, user_id: str = None):
-        """
-        Kullanıcı bazlı veya default Binance API client'ı oluşturur.
-        """
-        if user_id:
-            user_keys = get_user_api_keys(user_id)
-            if user_keys:
-                LOG.info(f"WorkerA: User-specific API keys loaded for user_id={user_id}")
-                return get_binance_api(
-                    api_key=user_keys["api_key"],
-                    api_secret=user_keys["secret_key"]
-                )
-            else:
-                LOG.warning(f"WorkerA: user_id={user_id} için API key bulunamadı, fallback olarak default key kullanılacak.")
+        # (Not: İleride user_id gerekirse trade/alarmlarda kullanılacak)
+        self.user_id = user_id
 
+    def _init_global_client(self) -> BinanceClient:
+        """
+        Funding / open interest gibi genel endpointler için
+        her zaman .env içindeki global API key kullanılır.
+        """
         if CONFIG.BINANCE.API_KEY and CONFIG.BINANCE.SECRET_KEY:
-            LOG.info("WorkerA: Default API keys from .env kullanılıyor.")
-            return get_binance_api(
-                api_key=CONFIG.BINANCE.API_KEY,
-                api_secret=CONFIG.BINANCE.SECRET_KEY
-            )
-
-        LOG.info("WorkerA: Public-only Binance client oluşturuldu.")
-        return get_binance_api()  # Public erişim (API key yok)
+            LOG.info("WorkerA: Global API keys (env) kullanılacak.")
+            return BinanceClient(CONFIG.BINANCE.API_KEY, CONFIG.BINANCE.SECRET_KEY)
+        else:
+            LOG.warning("WorkerA: API key bulunamadı → sadece public endpoint kullanılabilir!")
+            return BinanceClient()  # public-only
 
     async def start_async(self):
         if self._running:
@@ -90,6 +77,7 @@ class WorkerA:
                 data = {}
                 for symbol in CONFIG.BINANCE.TOP_SYMBOLS_FOR_IO:
                     try:
+                        # 🔹 Global API key ile funding alınır
                         fr = await self.client.get_funding_rate(symbol)
                         data[symbol] = fr
                     except ValueError as ve:
