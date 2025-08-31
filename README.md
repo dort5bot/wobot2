@@ -24,3 +24,15 @@ Bu fonksiyonlar için **API key gerekmez**. Örnek kullanım:
 client = BinanceClient()
 data = await client.get_order_book("BTCUSDT")
 
+
+
+####
+📦 GLOBAL API (.env)
+└── WorkerA, WorkerB, WorkerC → Sadece VERİ OKUMA
+
+📦 KİŞİSEL API (DB)  
+└── PersonalTrader → Sadece ALARM/TRADE işlemleri
+    └── Her kullanıcı için ayrı client
+    └── Real-time DB query + caching
+
+###
