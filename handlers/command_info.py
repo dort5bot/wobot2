@@ -15,6 +15,6 @@ COMMAND_INFO = {
     "fr": "Funding Rate raporu ve günlük CSV kaydı",
     "whale": "Whale Alerts raporu ve günlük CSV kaydı",
     "t":"/t →hazir liste, /t n →hacimli n coin, /t coin zaman →coin zaman bilgisi",
-    "etf":"wobot1 etf  → yok"
-    "⚡":"❗",
+    "etf":"wobot2 etf  → yok"
+    "misal":"oku",
 }
