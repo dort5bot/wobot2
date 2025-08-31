@@ -1,19 +1,6 @@
 # utils/config.py
 # Binance bot için konfigürasyon dosyası.
-# Tüm parametreler merkezi olarak burada tutulur ve runtime sırasında güncellenebilir.
-
-'''
-# - .env üzerinden tüm değerleri yükler
-# - CONFIG nesnesi altında gruplanmış halde kullanılabilir
-# - Binance, Bot, TA, System, IO, Telegram, Database modülleri ayrı dataclass ile yönetilir
-Ek faydalı configler ekleme > Binance connection management
-    RATE_LIMIT_BUFFER: Rate limit için buffer süresi
-    LOG_LEVEL ve DEBUG_MODE: Sistem log seviyeleri
-    Telegram için ENABLED, RETRY_ATTEMPTS, TIMEOUT
-    Database için BACKUP_INTERVAL ve MAX_BACKUP_FILES
-    Type annotations eklendi: Tüm yeni değişkenlere uygun type annotations eklendi.
-Bu eklemeler sistemin daha robust ve configurable olmasını sağlayacaktır.
-'''
+# Tüm parametreler merkezi olarak burada tutulur ve runtime sırasında güncellenebilir. sistem daha robust ve configurable
 
 import os
 import logging
@@ -27,47 +14,37 @@ load_dotenv(ENV_PATH, override=True)
 # ✅=== Binance Config ===✅
 @dataclass
 class BinanceConfig:
-    # --- API Bağlantıları ---
-    BASE_URL: str = "https://api.binance.com"       # Spot API
-    FAPI_URL: str = "https://fapi.binance.com"      # Futures API
-    VAPI_URL: str = "https://vapi.binance.com"      # Options API
+    BASE_URL: str = "https://api.binance.com"
+    FAPI_URL: str = "https://fapi.binance.com"
+    VAPI_URL: str = "https://vapi.binance.com"
 
-    # --- API Anahtarları ---
     API_KEY: Optional[str] = os.getenv("BINANCE_API_KEY")
     SECRET_KEY: Optional[str] = os.getenv("BINANCE_SECRET_KEY")
 
-    # --- İstek Ayarları ---
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", 10))
     DEFAULT_RETRY_ATTEMPTS: int = int(os.getenv("DEFAULT_RETRY_ATTEMPTS", 3))
     RATE_LIMIT_BUFFER: float = float(os.getenv("RATE_LIMIT_BUFFER", 0.1))
     MAX_REQUESTS_PER_SECOND: int = int(os.getenv("MAX_REQUESTS_PER_SECOND", 10))
 
-    # --- Circuit Breaker Ayarları ---
     CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
     CIRCUIT_BREAKER_RESET_TIMEOUT: int = int(os.getenv("CIRCUIT_BREAKER_RESET_TIMEOUT", 60))
 
-    # --- WebSocket Ayarları ---
     WS_RECONNECT_DELAY: int = int(os.getenv("WS_RECONNECT_DELAY", 5))
     MAX_WS_CONNECTIONS: int = int(os.getenv("MAX_WS_CONNECTIONS", 5))
     CACHE_CLEANUP_INTERVAL: int = int(os.getenv("CACHE_CLEANUP_INTERVAL", 60))
 
-    # --- Cache Ayarları ---
     BINANCE_TICKER_TTL: int = int(os.getenv("BINANCE_TICKER_TTL", 5))
     CONCURRENCY: int = int(os.getenv("BINANCE_CONCURRENCY", 8))
 
-    # --- Stream Varsayılanları ---
     STREAM_INTERVAL: str = os.getenv("STREAM_INTERVAL", "1m")
 
-    # --- Ticaret Ayarları ---
     TRADES_LIMIT: int = int(os.getenv("TRADES_LIMIT", 500))
     WHALE_USD_THRESHOLD: float = float(os.getenv("WHALE_USD_THRESHOLD", 50000))
     FUNDING_POLL_INTERVAL: int = int(os.getenv("FUNDING_POLL_INTERVAL", 5))
 
-    # --- Logging / Debugging ---
-    LOG_LEVEL: int = getattr(logging, os.getenv("LOG_LEVEL", "INFO"))  # String'i logging level'a çevir
+    LOG_LEVEL: int = getattr(logging, os.getenv("LOG_LEVEL", "INFO"))
     DEBUG_MODE: bool = os.getenv("DEBUG_MODE", "false").lower() == "true"
 
-    # --- Sembol Listeleri ---
     TOP_SYMBOLS_FOR_IO: List[str] = field(
         default_factory=lambda: os.getenv("TOP_SYMBOLS_FOR_IO", "BTCUSDT,ETHUSDT").split(",")
     )
@@ -84,6 +61,7 @@ class BotConfig:
     PAPER_MODE: bool = os.getenv("PAPER_MODE", "true").lower() == "true"
     EVALUATOR_WINDOW: int = int(os.getenv("EVALUATOR_WINDOW", 60))
     EVALUATOR_THRESHOLD: float = float(os.getenv("EVALUATOR_THRESHOLD", 0.5))
+    SIGNAL_COOLDOWN: int = int(os.getenv("SIGNAL_COOLDOWN", 60))
 
 # ✅=== TA Config ===✅
 @dataclass
@@ -109,12 +87,13 @@ class TAConfig:
     OPEN_INTEREST_ENABLED: bool = os.getenv("OPEN_INTEREST_ENABLED", "true").lower() == "true"
     FUNDING_RATE_ENABLED: bool = os.getenv("FUNDING_RATE_ENABLED", "true").lower() == "true"
     SOCIAL_SENTIMENT_ENABLED: bool = os.getenv("SOCIAL_SENTIMENT_ENABLED", "false").lower() == "true"
-    TA_CACHE_TTL = 300          # TA için 5 dakika    worker_d.py 4 satır
-    TA_PIPELINE_INTERVAL = 60   # 1 dakika interval
-    TA_MIN_DATA_POINTS = 20     # Minimum 20 data point
-    TA_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "TRXUSDT"]
+    TA_CACHE_TTL: int = int(os.getenv("TA_CACHE_TTL", 300))
+    TA_PIPELINE_INTERVAL: int = int(os.getenv("TA_PIPELINE_INTERVAL", 60))
+    TA_MIN_DATA_POINTS: int = int(os.getenv("TA_MIN_DATA_POINTS", 20))
+    TA_SYMBOLS: List[str] = field(
+        default_factory=lambda: os.getenv("TA_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,TRXUSDT").split(",")
+    )
 
-    # Advanced alpha_ta & analysis params
     ALPHA_LONG_THRESHOLD: float = float(os.getenv("ALPHA_LONG_THRESHOLD", 0.6))
     ALPHA_SHORT_THRESHOLD: float = float(os.getenv("ALPHA_SHORT_THRESHOLD", -0.6))
 
@@ -126,7 +105,6 @@ class TAConfig:
     ENTROPY_R_FACTOR: float = float(os.getenv("ENTROPY_R_FACTOR", 0.2))
     LEADLAG_MAX_LAG: int = int(os.getenv("LEADLAG_MAX_LAG", 10))
 
-    # alpha_ta ağırlıkları
     W_KALMAN: float = float(os.getenv("W_KALMAN", 0.20))
     W_HILBERT: float = float(os.getenv("W_HILBERT", 0.20))
     W_ENTROPY: float = float(os.getenv("W_ENTROPY", 0.20))
@@ -137,6 +115,13 @@ class TAConfig:
 @dataclass
 class SystemConfig:
     MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", 2))
+
+# ✅=== Worker Config ===✅
+@dataclass
+class WorkerConfig:
+    WORKER_B_INTERVAL: int = int(os.getenv("WORKER_B_INTERVAL", 5))
+    WORKER_B_WORKERS: int = int(os.getenv("WORKER_B_WORKERS", 3))
+    WORKER_B_PROC_MAXSIZE: int = int(os.getenv("WORKER_B_PROC_MAXSIZE", 2000))
 
 # ✅=== IO Config ===✅
 @dataclass
@@ -188,28 +173,18 @@ class AppConfig:
     IO: IOConfig = field(default_factory=IOConfig)
     TELEGRAM: TelegramConfig = field(default_factory=TelegramConfig)
     DATABASE: DatabaseConfig = field(default_factory=DatabaseConfig)
+    WORKER: WorkerConfig = field(default_factory=WorkerConfig)
 
 CONFIG = AppConfig()
 
 # ✅--- Runtime Config Güncelleme Fonksiyonları ---
-
 def update_binance_keys(api_key: str, secret_key: str):
-    """
-    Sadece Binance API Key ve Secret'ını runtime'da günceller.
-    """
     CONFIG.BINANCE.API_KEY = api_key
     CONFIG.BINANCE.SECRET_KEY = secret_key
 
 def update_binance_config(**kwargs):
-    """
-    BinanceConfig içerisindeki herhangi bir parametreyi runtime'da günceller.
-    Örnek kullanım:
-        update_binance_config(REQUEST_TIMEOUT=20, LOG_LEVEL=logging.DEBUG)
-    """
     for k, v in kwargs.items():
         if hasattr(CONFIG.BINANCE, k):
             setattr(CONFIG.BINANCE, k, v)
         else:
             raise AttributeError(f"BinanceConfig parametresi bulunamadı: {k}")
-
-
