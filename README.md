@@ -26,13 +26,13 @@ data = await client.get_order_book("BTCUSDT")
 
 
 
-####
-📦 GLOBAL API (.env)
-└── WorkerA, WorkerB, WorkerC → Sadece VERİ OKUMA, trade yapmaz
+✅ 
+GLOBAL API (.env)
+-WorkerA, WorkerB, WorkerC → Sadece VERİ OKUMA, trade yapmaz
 
-📦 KİŞİSEL API (DB)  
-└── PersonalTrader → Sadece ALARM/TRADE işlemleri
-    └── Her kullanıcı için ayrı client
-    └── Real-time DB query + caching
+KİŞİSEL API (DB)  
+-PersonalTrader → Sadece ALARM/TRADE işlemleri
+-- Her kullanıcı için ayrı client
+--Real-time DB query + caching
 
-###
+✅ 
