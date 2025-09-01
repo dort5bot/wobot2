@@ -1,4 +1,6 @@
 # utils/db.py
+# utils/db.py → Trading simülasyonu ve strateji testi
+# utils/init_db.py → Gerçek kullanıcı verileri ve production
 import sqlite3
 import os
 from datetime import datetime
