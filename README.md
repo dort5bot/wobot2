@@ -61,7 +61,16 @@ utils/init_db.py
 
 🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
 🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+## utils/ta_utils.py
 
+1. Unified RSI/MACD: Tek bir fonksiyon hem pandas hem de liste/array inputlarını destekler
+2. Cache Limit: MAX_CACHE_ENTRIES ile cache büyümesi kontrol altında
+3. Error Handling: Kapsamlı hata yönetimi ve logging
+4. Config Fallback: CONFIG yüklenemezse güvenli default değerler
+5. Thread Safety: Asyncio/threading uyumluluğu
+6. Alpha Signals: Gelişmiş sinyal üretme mekanizması
+7. Backward Compatibility: Eski kodlarla uyumluluk
+<img width="524" height="129" alt="image" src="https://github.com/user-attachments/assets/b5082c45-6044-4c5c-b072-ec4f7476839b" />
 
 
 
