@@ -1,4 +1,4 @@
-#binance_api.py 901-2211
+#binance_api.py 901-2211>>902-0051
 '''
 ✅ Tüm API çağrıları try-except ile sarıldı
 ✅ Tutarlı logging kullanımı sağlandı
@@ -33,6 +33,7 @@ from collections import defaultdict
 from enum import Enum
 
 from utils.config import CONFIG
+from binance import AsyncClient, BinanceSocketManager
 
 # -------------------------------------------------------------
 # Logger - Tüm dosyada tutarlı logging
@@ -44,6 +45,44 @@ if not LOG.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
+
+
+# -------------------------------------------------------------
+# binance_api işlemleri global ve kişisel,
+# -------------------------------------------------------------
+
+class BinanceAPI:
+    def __init__(self):
+        self.clients = {}  # user_id -> client mapping
+        self.global_client = None
+        self.lock = asyncio.Lock()
+    
+    async def initialize_global_client(self):
+        """.env'deki API key ile global client oluştur"""
+        try:
+            api_key = os.getenv('BINANCE_API_KEY')
+            api_secret = os.getenv('BINANCE_API_SECRET')
+            
+            if api_key and api_secret:
+                self.global_client = await AsyncClient.create(api_key, api_secret)
+                logger.info("Global Binance client .env API key ile oluşturuldu")
+            else:
+                self.global_client = await AsyncClient.create()
+                logger.warning(".env'de API key bulunamadı, anonymous client oluşturuldu")
+                
+        except Exception as e:
+            logger.error(f"Global client oluşturulamadı: {e}")
+            self.global_client = await AsyncClient.create()  # fallback to anonymous
+
+# Singleton instance
+binance_api = BinanceAPI()
+
+async def get_global_binance_client():
+    """Global client'ı döndür, yoksa oluştur"""
+    if binance_api.global_client is None:
+        await binance_api.initialize_global_client()
+    return binance_api.global_client
+
 
 # -------------------------------------------------------------
 # Enum'lar ve Sabitler
@@ -908,4 +947,5 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
     return binance_client
 
 # EOF
+
 
