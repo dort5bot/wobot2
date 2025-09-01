@@ -2,7 +2,7 @@
 import os
 import logging
 from typing import Optional, Dict, Any
-from .binance_api import get_binance_api  # ✅ Güncel import
+from .binance_api import get_binance_client  # ✅ Yeni import
 from . import db
 import math
 
