@@ -1,4 +1,4 @@
-# ta_utils.py 901-2211
+# ta_utils.py 901-2307
 # Free Render uyumlu hibrit TA pipeline
 # - CPU-bound: ThreadPoolExecutor
 # - IO-bound: asyncio
@@ -744,7 +744,9 @@ def kalman_filter_series(prices: pd.Series, q: Optional[float] = None, r: Option
         out = []
         initialized = False
 
-        vals = prices.fillna(method="ffill").values
+        # ❌ Eski: vals = prices.fillna(method="ffill").values
+        # ✅ Yeni: 
+        vals = prices.ffill().values  # fillna(method="ffill") yerine ffill() kullan
         for z in vals:
             z = float(z)
             if not initialized:
@@ -761,7 +763,7 @@ def kalman_filter_series(prices: pd.Series, q: Optional[float] = None, r: Option
         return pd.Series(out, index=prices.index, name="kalman")
     except Exception as e:
         logger.error(f"Kalman filter hesaplanırken hata: {e}")
-        return pd.Series([np.nan] * len(prices), index=prices.index)
+        return pd.Series([np.nan] * len(prices), index=prices.index, name="kalman")
 
 def _hilbert_fallback(x: np.ndarray) -> np.ndarray:
     n = len(x)
@@ -832,23 +834,36 @@ def market_regime(series: pd.Series, window: Optional[int] = None) -> pd.Series:
 
         returns = series.pct_change().dropna()
         if len(returns) < window:
-            return pd.Series([0.0] * len(series), index=series.index)
+            # Yeterli veri yoksa default değer döndür
+            return pd.Series([0.5] * len(series), index=series.index, name="regime")
 
         hurst_exp = []
         for i in range(window, len(returns) + 1):
             r = returns.iloc[i - window:i]
             lags = range(2, min(20, len(r)))
-            tau = [np.sqrt(np.std(np.subtract(r[lag:].values, r[:-lag].values))) for lag in lags]
-            poly = np.polyfit(np.log(lags), np.log(tau), 1)
-            hurst_exp.append(poly[0] * 2.0)
+            if len(r) < 2:  # En az 2 data point gerekli
+                hurst_exp.append(0.5)
+                continue
+                
+            tau = [np.sqrt(np.std(np.subtract(r[lag:].values, r[:-lag].values))) for lag in lags if len(r[lag:]) > 0 and len(r[:-lag]) > 0]
+            if not tau:  # tau listesi boşsa
+                hurst_exp.append(0.5)
+                continue
+                
+            try:
+                poly = np.polyfit(np.log(lags[:len(tau)]), np.log(tau), 1)
+                hurst_exp.append(poly[0] * 2.0)
+            except (ValueError, TypeError):
+                hurst_exp.append(0.5)
 
-        # NaN'ları doldur
+        # NaN'ları doldur ve uzunluğu series ile eşleştir
         hurst_series = pd.Series([np.nan] * (window - 1) + hurst_exp, index=series.index)
+        hurst_series = hurst_series.reindex(series.index, fill_value=0.5)  # Eksik indexleri 0.5 ile doldur
         hurst_series = hurst_series.fillna(method='bfill').fillna(0.5)
         return hurst_series
     except Exception as e:
         logger.error(f"Market regime hesaplanırken hata: {e}")
-        return pd.Series([0.5] * len(series), index=series.index)
+        return pd.Series([0.5] * len(series), index=series.index, name="regime")
 
 def lead_lag_correlation(series: pd.Series, max_lag: Optional[int] = None) -> float:
     """
@@ -1200,3 +1215,4 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
