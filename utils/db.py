@@ -1,6 +1,14 @@
 # utils/db.py
 # utils/db.py → Trading simülasyonu ve strateji testi
 # utils/init_db.py → Gerçek kullanıcı verileri ve production
+'''
+* (atıf) Erişmesi Gerekenler:
+paper_trading/ modülleri
+strategies/ modülleri (sinyal loglama için)
+services/paper_trading_service.py
+'''
+
+
 import sqlite3
 import os
 from datetime import datetime
