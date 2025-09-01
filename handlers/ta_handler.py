@@ -1,10 +1,13 @@
-# handlers/ta_handler.py 901-2211
+# handlers/ta_handler.py 901-2211>> 901-2345
+# handlers/ta_handler.py
 import asyncio
 import pandas as pd
 from telegram import Update
 from telegram.ext import CommandHandler, CallbackContext
 
-from utils.binance_api import get_binance_api
+# ❌ Eski: from utils.binance_api import get_binance_api
+# ✅ Yeni:
+from utils.binance_api import get_binance_client
 from utils.config import CONFIG
 from utils.ta_utils import (
     calculate_all_ta_hybrid_async, 
@@ -18,7 +21,9 @@ from utils.ta_utils import (
 # OHLCV Fetch (Güncellenmiş)
 # ------------------------------------------------------------
 async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.DataFrame:
-    client = get_binance_api()
+    # ❌ Eski: client = get_binance_api()
+    # ✅ Yeni:
+    client = get_binance_client(None, None)  # Global instance'ı kullan
     limit = max(hours * 3, 200)
     klines = await client.get_klines(symbol, interval=interval, limit=limit)
     return klines_to_dataframe(klines)
@@ -144,17 +149,75 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                 
             # Trend filtreleme komutları
             if len(args) >= 1 and args[0].lower() in ['trend', 't', 'tt', 'crash', 'c', 'range', 'r']:
-                # [Önceki trend komutları kodu aynı kalacak]
-                # Sadece scan_market() çağrısı yeni fonksiyonu kullanacak
-                results = await scan_market()
-                # ... kalan kod aynı
+                trend_type = args[0].lower()
+                hours = int(args[1]) if len(args) > 1 else 4
+                
+                results = await scan_market(interval="1h", hours=hours)
+                
+                # Trend filtreleme
+                filtered_coins = {}
+                for symbol, data in results.items():
+                    regime = regime_label(data['detail']['regime_score'])
+                    
+                    if trend_type in ['trend', 't', 'tt'] and regime == "trend":
+                        filtered_coins[symbol] = data
+                    elif trend_type in ['crash', 'c'] and regime == "crash":
+                        filtered_coins[symbol] = data
+                    elif trend_type in ['range', 'r'] and regime == "range":
+                        filtered_coins[symbol] = data
+                
+                # Sıralama
+                sorted_coins = sorted(
+                    filtered_coins.items(), 
+                    key=lambda x: abs(x[1]['score']), 
+                    reverse=True
+                )[:15]  # En fazla 15 coin
+                
+                # Mesaj oluşturma
+                if not sorted_coins:
+                    text = f"⚠️ {trend_type.upper()} rejiminde coin bulunamadı"
+                    await context.bot.send_message(chat_id=chat_id, text=text)
+                    return
+                
+                text = f"📊 {trend_type.upper()} Rejimi ({hours}sa)\n\n"
+                for symbol, data in sorted_coins:
+                    coin_name = format_coin_name(symbol)
+                    text += (
+                        f"{coin_name:6} α:{data['score']:.2f} "
+                        f"{get_kalman_symbol(data['detail']['kalman_score'])} "
+                        f"{'🟢' if data['signal'] == 1 else '🔴' if data['signal'] == -1 else '⚪'}\n"
+                    )
+                
+                # Yorum ekleme
+                commentary = get_trend_commentary(regime_label(data['detail']['regime_score']), len(sorted_coins))
+                text += f"\n{commentary}"
+                
+                await context.bot.send_message(chat_id=chat_id, text=text)
                 
             # Market scan komutu
             elif len(args) == 0 or (len(args) == 1 and (args[0].lower() == "all" or args[0].isdigit())):
-                # [Önceki market scan kodu]
-                # scan_market() çağrısı güncellenecek
-                results = await scan_market()
-                # ... kalan kod aynı
+                hours = int(args[0]) if args and args[0].isdigit() else 4
+                
+                results = await scan_market(interval="1h", hours=hours)
+                
+                # Sinyal gücüne göre sırala
+                sorted_coins = sorted(
+                    results.items(), 
+                    key=lambda x: abs(x[1]['score']), 
+                    reverse=True
+                )[:15]
+                
+                text = f"🔍 Market Scan ({hours}sa)\n\n"
+                for symbol, data in sorted_coins:
+                    coin_name = format_coin_name(symbol)
+                    regime = regime_label(data['detail']['regime_score'])
+                    text += (
+                        f"{coin_name:6} α:{data['score']:.2f} "
+                        f"{regime[:1]} {get_kalman_symbol(data['detail']['kalman_score'])} "
+                        f"{'🟢' if data['signal'] == 1 else '🔴' if data['signal'] == -1 else '⚪'}\n"
+                    )
+                
+                await context.bot.send_message(chat_id=chat_id, text=text)
                 
             # Tek coin analizi
             else:
