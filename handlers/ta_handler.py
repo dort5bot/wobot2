@@ -1,12 +1,12 @@
-# handlers/ta_handler.py 901-2211>> 901-2345
-# handlers/ta_handler.py
+# handlers/ta_handler.py 902-0038
 import asyncio
 import pandas as pd
 from telegram import Update
 from telegram.ext import CommandHandler, CallbackContext
+from datetime import datetime
+import time
 
-# ❌ Eski: from utils.binance_api import get_binance_api
-# ✅ Yeni:
+# Binance API
 from utils.binance_api import get_binance_client
 from utils.config import CONFIG
 from utils.ta_utils import (
@@ -18,12 +18,10 @@ from utils.ta_utils import (
 )
 
 # ------------------------------------------------------------
-# OHLCV Fetch (Güncellenmiş)
+# OHLCV Fetch
 # ------------------------------------------------------------
 async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.DataFrame:
-    # ❌ Eski: client = get_binance_api()
-    # ✅ Yeni:
-    client = get_binance_client(None, None)  # Global instance'ı kullan
+    client = get_binance_client(None, None)
     limit = max(hours * 3, 200)
     klines = await client.get_klines(symbol, interval=interval, limit=limit)
     return klines_to_dataframe(klines)
@@ -79,11 +77,24 @@ def get_trend_commentary(trend_type: str, count: int) -> str:
     else:
         return f"🟢 {comment} - {count} coin"
 
+def get_signal_emoji(signal: int) -> str:
+    if signal == 1:
+        return "🟢"
+    elif signal == -1:
+        return "🔴"
+    return "⚪"
+
+def get_signal_text(signal: int) -> str:
+    if signal == 1:
+        return "LONG"
+    elif signal == -1:
+        return "SHORT"
+    return "FLAT"
+
 # ------------------------------------------------------------
-# Market Tarama (Güncellenmiş)
+# Market Tarama
 # ------------------------------------------------------------
 async def scan_market(symbols: list = None, interval: str = "1h", hours: int = 4) -> dict:
-    """Yeni ta_utils ile uyumlu market tarama fonksiyonu"""
     if symbols is None:
         symbols = CONFIG.BINANCE.SCAN_SYMBOLS
     
@@ -92,16 +103,11 @@ async def scan_market(symbols: list = None, interval: str = "1h", hours: int = 4
     for symbol in symbols:
         try:
             df = await fetch_ohlcv(symbol, hours=hours, interval=interval)
-            if len(df) < 20:  # Minimum data kontrolü
+            if len(df) < 20:
                 continue
                 
-            # TA hesaplamaları
             ta_results = await calculate_all_ta_hybrid_async(df, symbol)
-            
-            # Sinyal üretme
             signal_result = generate_signals(df)
-            
-            # Alpha detayları (ta_utils'deki alpha_ta fonksiyonuna uyumlu)
             alpha_details = signal_result.get('alpha_details', {})
             
             results[symbol] = {
@@ -111,10 +117,7 @@ async def scan_market(symbols: list = None, interval: str = "1h", hours: int = 4
                     'regime_score': alpha_details.get('regime_signal', 0),
                     'kalman_score': alpha_details.get('kalman_signal', 0),
                     'entropy_score': alpha_details.get('entropy', 0),
-                    'leadlag': {
-                        'corr': alpha_details.get('lead_lag', 0),
-                        'lag': 0  # Bu bilgi alpha_ta'da yok, güncellenebilir
-                    }
+                    'leadlag': alpha_details.get('lead_lag', 0)
                 }
             }
             
@@ -123,6 +126,54 @@ async def scan_market(symbols: list = None, interval: str = "1h", hours: int = 4
             continue
     
     return results
+
+# ------------------------------------------------------------
+# Market Raporu Fonksiyonu
+# ------------------------------------------------------------
+async def generate_market_report(results: dict, interval: str, hours: int, limit: int = None) -> str:
+    if limit:
+        sorted_coins = sorted(results.items(), key=lambda x: abs(x[1]['score']), reverse=True)[:limit]
+    else:
+        sorted_coins = sorted(results.items(), key=lambda x: abs(x[1]['score']), reverse=True)
+    
+    # İstatistikler
+    total_coins = len(sorted_coins)
+    trend_coins = sum(1 for _, data in sorted_coins if regime_label(data['detail']['regime_score']) == "trend")
+    range_coins = sum(1 for _, data in sorted_coins if regime_label(data['detail']['regime_score']) == "range")
+    crash_coins = sum(1 for _, data in sorted_coins if regime_label(data['detail']['regime_score']) == "crash")
+    
+    # En güçlü sinyaller
+    top_signals = sorted_coins[:3]
+    
+    # Rapor oluştur
+    current_time = datetime.utcnow().strftime("%H:%M UTC")
+    
+    text = f"📊 MARKET TARAMA RAPORU\n"
+    text += f"⏰ {current_time} | {interval} Timeframe\n"
+    text += f"📈 {hours} saatlik veri ile analiz\n\n"
+    
+    text += f"🔢 TOPLAM: {total_coins} coin taranıyor\n"
+    text += f"📈 TREND: {trend_coins} coin ({int(trend_coins/total_coins*100)}%)\n"
+    text += f"🔄 RANGE: {range_coins} coin ({int(range_coins/total_coins*100)}%)\n"
+    text += f"📉 CRASH: {crash_coins} coin ({int(crash_coins/total_coins*100)}%)\n\n"
+    
+    text += "🏆 EN GÜÇLÜ SİNYALLER:\n"
+    for i, (symbol, data) in enumerate(top_signals, 1):
+        coin_name = format_coin_name(symbol)
+        regime = regime_label(data['detail']['regime_score'])
+        text += f"{i}. {coin_name}: α={data['score']:.2f} [{get_signal_text(data['signal'])}] | {regime}({data['detail']['regime_score']:.2f})\n"
+    
+    # Sistem durumu
+    health = health_check()
+    cache_stats = get_cache_stats()
+    hit_ratio = cache_stats['hit_ratio'] * 100
+    
+    text += f"\n⚡ SİSTEM DURUMU:\n"
+    text += f"• Cache: {hit_ratio:.1f}% isabet\n"
+    text += f"• Hesaplamalar: {health['metrics']['total_calculations']:,}\n"
+    text += f"• Hata oranı: {health['metrics']['error_rate']*100:.1f}%"
+    
+    return text
 
 # ------------------------------------------------------------
 # Geliştirilmiş TA Handler
@@ -134,23 +185,59 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
     async def _run():
         try:
             # Sistem durumu komutu
-            if args and args[0].lower() in ['status', 'health', 'durum']:
+            if args and args[0].lower() in ['status', 's', 'durum']:
                 health = health_check()
                 cache_stats = get_cache_stats()
+                hit_ratio = cache_stats['hit_ratio'] * 100
                 
                 text = f"🔄 TA Sistemi Durumu\n"
                 text += f"📊 Durum: {health['status']}\n"
-                text += f"💾 Cache: {cache_stats['hits']}/{cache_stats['hits']+cache_stats['misses']} isabet\n"
-                text += f"📈 Hesaplamalar: {health['metrics']['total_calculations']}\n"
+                text += f"💾 Cache: {cache_stats['hits']}/{cache_stats['hits']+cache_stats['misses']} isabet ({hit_ratio:.1f}%)\n"
+                text += f"📈 Hesaplamalar: {health['metrics']['total_calculations']:,}\n"
                 text += f"❌ Hatalar: {health['metrics']['calculation_errors']}\n"
+                text += f"📉 Hata oranı: {health['metrics']['error_rate']*100:.1f}%"
                 
                 await context.bot.send_message(chat_id=chat_id, text=text)
+                return
+                
+            # Market durumu raporu
+            if args and args[0].lower() in ['market', 'm']:
+                hours = 4
+                interval = "1h"
+                limit = None
+                
+                # Parametreleri parse et
+                if len(args) > 1:
+                    for arg in args[1:]:
+                        if arg.endswith('h'):
+                            try:
+                                hours = int(arg[:-1])
+                            except:
+                                pass
+                        elif arg in ['1h', '4h', '1d']:
+                            interval = arg
+                        elif arg.isdigit():
+                            limit = int(arg)
+                
+                results = await scan_market(interval=interval, hours=hours)
+                report = await generate_market_report(results, interval, hours, limit)
+                
+                await context.bot.send_message(chat_id=chat_id, text=report)
                 return
                 
             # Trend filtreleme komutları
             if len(args) >= 1 and args[0].lower() in ['trend', 't', 'tt', 'crash', 'c', 'range', 'r']:
                 trend_type = args[0].lower()
-                hours = int(args[1]) if len(args) > 1 else 4
+                hours = 4
+                limit = 15
+                
+                # Parametreleri parse et
+                if len(args) > 1:
+                    for arg in args[1:]:
+                        if arg.isdigit():
+                            limit = int(arg)
+                        elif arg in ['c', 'crash'] and trend_type in ['trend', 't']:
+                            trend_type = 'crash'
                 
                 results = await scan_market(interval="1h", hours=hours)
                 
@@ -171,7 +258,7 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     filtered_coins.items(), 
                     key=lambda x: abs(x[1]['score']), 
                     reverse=True
-                )[:15]  # En fazla 15 coin
+                )[:limit]
                 
                 # Mesaj oluşturma
                 if not sorted_coins:
@@ -179,13 +266,18 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     await context.bot.send_message(chat_id=chat_id, text=text)
                     return
                 
-                text = f"📊 {trend_type.upper()} Rejimi ({hours}sa)\n\n"
+                trend_name = "TREND" if trend_type in ['trend', 't', 'tt'] else "CRASH" if trend_type in ['crash', 'c'] else "RANGE"
+                text = f"📊 {trend_name} Coin'ler (Top {len(sorted_coins)})\n\n"
+                
                 for symbol, data in sorted_coins:
                     coin_name = format_coin_name(symbol)
+                    regime_score = data['detail']['regime_score']
                     text += (
                         f"{coin_name:6} α:{data['score']:.2f} "
+                        f"[{get_signal_text(data['signal'])}] "
+                        f"{regime_label(regime_score)[0]}({regime_score:.2f}) "
                         f"{get_kalman_symbol(data['detail']['kalman_score'])} "
-                        f"{'🟢' if data['signal'] == 1 else '🔴' if data['signal'] == -1 else '⚪'}\n"
+                        f"{get_signal_emoji(data['signal'])}\n"
                     )
                 
                 # Yorum ekleme
@@ -193,19 +285,26 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                 text += f"\n{commentary}"
                 
                 await context.bot.send_message(chat_id=chat_id, text=text)
+                return
                 
             # Market scan komutu
             elif len(args) == 0 or (len(args) == 1 and (args[0].lower() == "all" or args[0].isdigit())):
                 hours = int(args[0]) if args and args[0].isdigit() else 4
+                limit = 15
                 
-                results = await scan_market(interval="1h", hours=hours)
+                if args and args[0].lower() == "all":
+                    symbols = None  # Tüm coin'ler
+                else:
+                    symbols = CONFIG.BINANCE.SCAN_SYMBOLS
+                
+                results = await scan_market(symbols=symbols, interval="1h", hours=hours)
                 
                 # Sinyal gücüne göre sırala
                 sorted_coins = sorted(
                     results.items(), 
                     key=lambda x: abs(x[1]['score']), 
                     reverse=True
-                )[:15]
+                )[:limit]
                 
                 text = f"🔍 Market Scan ({hours}sa)\n\n"
                 for symbol, data in sorted_coins:
@@ -214,14 +313,18 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     text += (
                         f"{coin_name:6} α:{data['score']:.2f} "
                         f"{regime[:1]} {get_kalman_symbol(data['detail']['kalman_score'])} "
-                        f"{'🟢' if data['signal'] == 1 else '🔴' if data['signal'] == -1 else '⚪'}\n"
+                        f"{get_signal_emoji(data['signal'])}\n"
                     )
                 
                 await context.bot.send_message(chat_id=chat_id, text=text)
+                return
                 
             # Tek coin analizi
             else:
-                coin = args[0].upper() + "USDT" if not args[0].upper().endswith("USDT") else args[0].upper()
+                coin = args[0].upper()
+                if not coin.endswith("USDT"):
+                    coin += "USDT"
+                
                 hours = int(args[1]) if len(args) > 1 else 4
                 
                 df = await fetch_ohlcv(coin, hours=hours, interval="1h")
@@ -229,7 +332,6 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     await context.bot.send_message(chat_id=chat_id, text="⚠️ Yetersiz veri")
                     return
                 
-                # Yeni TA pipeline kullanımı
                 ta_results = await calculate_all_ta_hybrid_async(df, coin)
                 signal_result = generate_signals(df)
                 alpha_details = signal_result.get('alpha_details', {})
@@ -238,13 +340,17 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                 text = (
                     f"🔍 {format_coin_name(coin)} ({hours}h)\n"
                     f"α_skor: {round(alpha_details.get('alpha_signal', 0), 2)} → "
-                    f"{'LONG' if signal_result['signal'] == 1 else 'SHORT' if signal_result['signal'] == -1 else 'FLAT'}\n"
+                    f"{get_signal_text(signal_result['signal'])}\n"
                     f"Rejim: {regime_label(alpha_details.get('regime_signal', 0))} "
                     f"({round(alpha_details.get('regime_signal', 0), 2)})\n"
                     f"Entropy: {round(alpha_details.get('entropy', 0), 2)}\n"
                     f"Kalman: {get_kalman_symbol(alpha_details.get('kalman_signal', 0))}\n"
                     f"Lead-Lag: {round(alpha_details.get('lead_lag', 0), 2)}\n"
                 )
+                
+                # Yorum ekleme
+                commentary = get_trend_commentary(regime_label(alpha_details.get('regime_signal', 0)), 1)
+                text += f"\n{commentary}"
                 
                 await context.bot.send_message(chat_id=chat_id, text=text)
 
@@ -258,4 +364,8 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
 # ------------------------------------------------------------
 def register(app):
     app.add_handler(CommandHandler("t", ta_handler))
-    app.add_handler(CommandHandler("ta", ta_handler))  # Alternatif komut
+    app.add_handler(CommandHandler("ta", ta_handler))
+    app.add_handler(CommandHandler("m", ta_handler))
+    app.add_handler(CommandHandler("market", ta_handler))
+    app.add_handler(CommandHandler("s", ta_handler))
+    app.add_handler(CommandHandler("status", ta_handler))
