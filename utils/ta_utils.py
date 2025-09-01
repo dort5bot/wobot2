@@ -1,5 +1,6 @@
 # ta_utils.py
 # Free Render uyumlu hibrit TA pipeline (Güncellenmiş Final)
+
 from __future__ import annotations
 
 import numpy as np
@@ -1090,3 +1091,4 @@ if __name__ == "__main__":
     print("Cache test:", ta_cache.get_ta_result("TEST", "1m", "test_value"))
     
     print("TA Utils loaded successfully!")
+
