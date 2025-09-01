@@ -9,7 +9,7 @@ import logging
 import os
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
-from utils.binance_api import get_binance_api
+from utils.binance_api import get_binance_client
 
 LOG = logging.getLogger(__name__)
 LOG.addHandler(logging.NullHandler())
@@ -41,7 +41,7 @@ def normalize_symbol(sym: str) -> str:
 # Ticker verisi çekme
 # -------------------------------------------------
 async def fetch_ticker_data(symbols=None, descending=True, sort_by="change"):
-    api = get_binance_api()
+    api = get_binance_client(None, None)  # Global instance
     data = await api.get_all_24h_tickers()
     if not data:
         return []
