@@ -4,6 +4,7 @@ wobot1 = robot1
 worker yapısına gecis
 
 ============================================
+
 önce kaynak: binance > herşey buna bağlı
 * herşey dahil edilmeli
 * spot-future -vb
