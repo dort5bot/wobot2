@@ -1,4 +1,4 @@
-# ta_utils.py 901-2307
+# ta_utils.py 901-2307>>902--102
 # Free Render uyumlu hibrit TA pipeline
 # - CPU-bound: ThreadPoolExecutor
 # - IO-bound: asyncio
@@ -472,32 +472,42 @@ def breakout(df: pd.DataFrame, period: int = 20) -> pd.Series:
 # =============================================================
 
 async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
-    """Binance'den gerçek funding rate çeker."""
+    """Binance'den gerçek funding rate çeker - .env API key ile"""
     try:
-        # ❌ Eski: from utils.binance_api import get_binance_api
-        # ✅ Yeni:
-        from utils.binance_api import get_binance_client
-        client = get_binance_client(None, None)  # Global instance'ı kullan
-        funding_data = await client.get_funding_rate(symbol, limit=1)
-        return float(funding_data[0]['fundingRate']) if funding_data else 0.001
+        from utils.binance_api import get_global_binance_client
+        client = await get_global_binance_client()
+        
+        # Funding rate endpoint'ini doğru şekilde çağır
+        try:
+            funding_data = await client.futures_funding_rate(symbol=symbol, limit=1)
+            if funding_data and len(funding_data) > 0:
+                return float(funding_data[0]['fundingRate'])
+            return 0.001
+        except Exception as e:
+            if "API" in str(e) or "key" in str(e) or "permission" in str(e):
+                LOG.warning(f"Funding rate için yetki yetersiz: {e}")
+            else:
+                LOG.error(f"Funding rate çekme hatası: {e}")
+            return 0.001
+                
     except Exception as e:
-        logger.error(f"Funding rate çekilemedi: {e}")
-        return 0.001  # Fallback değer
+        LOG.error(f"Funding rate çekilemedi: {e}")
+        return 0.001
 
 async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
-    """Gerçek zamanlı order book imbalance hesaplar."""
+    """Gerçek zamanlı order book imbalance hesaplar"""
     try:
-        # ❌ Eski: from utils.binance_api import get_binance_api
-        # ✅ Yeni:
-        from utils.binance_api import get_binance_client
-        client = get_binance_client(None, None)  # Global instance'ı kullan
-        ob = await client.get_order_book(symbol, limit=100)
+        from utils.binance_api import get_global_binance_client
+        client = await get_global_binance_client()
+        
+        ob = await client.get_order_book(symbol=symbol, limit=100)
         bids = [[float(b[0]), float(b[1])] for b in ob['bids']]
         asks = [[float(a[0]), float(a[1])] for a in ob['asks']]
         return order_book_imbalance(bids, asks)
+        
     except Exception as e:
-        logger.error(f"Order book imbalance hesaplanamadı: {e}")
-        return 0.0  # Fallback değer
+        LOG.error(f"Order book imbalance hesaplanamadı: {e}")
+        return 0.0    # Fallback değer
 
 async def fetch_social_sentiment_binance(symbol: str = "BTC") -> Dict[str, float]:
     """Social sentiment için placeholder."""
@@ -1224,5 +1234,6 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
