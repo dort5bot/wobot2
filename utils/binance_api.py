@@ -49,9 +49,6 @@ class WSMetrics:
 # -------------------------------------------------------------
 # Circuit Breaker Pattern
 # -------------------------------------------------------------
-import time
-from typing import Dict, Any
-
 class CircuitBreaker:
     def __init__(self, failure_threshold: int = 5, reset_timeout: int = 60):
         self.failure_threshold = failure_threshold
@@ -59,16 +56,6 @@ class CircuitBreaker:
         self.failure_count = 0
         self.last_failure_time = 0
         self.state = "CLOSED"
-
-    # CircuitBreaker sınıfına ekle:
-    def get_status(self) -> Dict[str, Any]:
-        return {
-            "state": self.state,
-            "failure_count": self.failure_count,
-            "last_failure_time": self.last_failure_time,
-            "failure_threshold": self.failure_threshold,
-            "reset_timeout": self.reset_timeout
-        }
 
     async def execute(self, func, *args, **kwargs):
         if self.state == "OPEN":
@@ -89,6 +76,16 @@ class CircuitBreaker:
             if self.failure_count >= self.failure_threshold:
                 self.state = "OPEN"
             raise e
+
+    def get_status(self) -> Dict[str, Any]:
+        """Circuit breaker durumunu döndür"""
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "last_failure_time": self.last_failure_time,
+            "failure_threshold": self.failure_threshold,
+            "reset_timeout": self.reset_timeout
+        }
 
 # Global circuit breaker instance
 binance_circuit_breaker = CircuitBreaker(
@@ -118,6 +115,36 @@ class BinanceHTTPClient:
         self.min_request_interval = 1.0 / CONFIG.BINANCE.MAX_REQUESTS_PER_SECOND
         self.metrics = RequestMetrics()
 
+        # Connection pool metrics
+        self.connection_pool = {
+            "total_connections": 0,
+            "active_connections": 0,
+            "max_concurrent": 0
+        }
+
+        # Priority queues
+        self.high_priority_sem = asyncio.Semaphore(max(1, CONFIG.BINANCE.CONCURRENCY // 2))
+        self.normal_priority_sem = asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY)
+        self.low_priority_sem = asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY * 2)
+
+        # Advanced cache with different TTLs
+        self._cache_strategies = {
+            "ticker": 5,           # 5 seconds
+            "klines": 30,          # 30 seconds
+            "orderbook": 2,        # 2 seconds
+            "exchange_info": 300,  # 5 minutes
+            "default": 10          # 10 seconds
+        }
+
+        # Dynamic rate limiting
+        self.rate_limits = {
+            "requests": {
+                "limit": CONFIG.BINANCE.MAX_REQUESTS_PER_SECOND,
+                "remaining": CONFIG.BINANCE.MAX_REQUESTS_PER_SECOND,
+                "reset_time": time.time() + 1
+            }
+        }
+
     def _cleanup_cache(self):
         current_time = time.time()
         expired_keys = [
@@ -127,12 +154,47 @@ class BinanceHTTPClient:
         for key in expired_keys:
             del self._cache[key]
 
+    def _get_cache_ttl(self, path: str) -> int:
+        """Path'e göre uygun TTL belirle"""
+        if "ticker" in path:
+            return self._cache_strategies["ticker"]
+        elif "klines" in path:
+            return self._cache_strategies["klines"]
+        elif "depth" in path:
+            return self._cache_strategies["orderbook"]
+        elif "exchangeInfo" in path:
+            return self._cache_strategies["exchange_info"]
+        else:
+            return self._cache_strategies["default"]
+
+    async def _check_rate_limit(self):
+        """Dinamik rate limit kontrolü"""
+        current_time = time.time()
+        
+        # Reset periodu dolduysa limitleri sıfırla
+        if current_time >= self.rate_limits["requests"]["reset_time"]:
+            self.rate_limits["requests"]["remaining"] = self.rate_limits["requests"]["limit"]
+            self.rate_limits["requests"]["reset_time"] = current_time + 1
+        
+        # Limit dolduysa bekle
+        if self.rate_limits["requests"]["remaining"] <= 0:
+            sleep_time = self.rate_limits["requests"]["reset_time"] - current_time
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
+                self.rate_limits["requests"]["remaining"] = self.rate_limits["requests"]["limit"]
+                self.rate_limits["requests"]["reset_time"] = time.time() + 1
+        
+        self.rate_limits["requests"]["remaining"] -= 1
+
     async def _request(self, method: str, path: str, params: Optional[dict] = None,
-                       signed: bool = False, futures: bool = False, max_retries: int = None) -> Any:
+                       signed: bool = False, futures: bool = False, max_retries: int = None,
+                       priority: str = "normal") -> Any:
         if max_retries is None:
             max_retries = CONFIG.BINANCE.DEFAULT_RETRY_ATTEMPTS
 
         # Rate limiting
+        await self._check_rate_limit()
+        
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         if time_since_last < self.min_request_interval:
@@ -164,7 +226,7 @@ class BinanceHTTPClient:
             self._last_cache_cleanup = current_time_cleanup
 
         cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
-        ttl = CONFIG.BINANCE.BINANCE_TICKER_TTL
+        ttl = self._get_cache_ttl(path)
         
         if ttl > 0 and cache_key in self._cache:
             ts_cache, data = self._cache[cache_key]
@@ -173,47 +235,126 @@ class BinanceHTTPClient:
                 return data
             self.metrics.cache_misses += 1
 
+        # Priority-based semaphore selection
+        if priority == "high":
+            sem = self.high_priority_sem
+        elif priority == "low":
+            sem = self.low_priority_sem
+        else:
+            sem = self.normal_priority_sem
+
         attempt = 0
         last_exception = None
         
+        # Akıllı retry stratejisi
+        retry_strategy = {
+            "429": {  # Rate limit
+                "base_delay": 1,
+                "max_delay": 60,
+                "backoff_factor": 2
+            },
+            "5xx": {  # Server errors
+                "base_delay": 2,
+                "max_delay": 30,
+                "backoff_factor": 1.5
+            },
+            "default": {  # Other errors
+                "base_delay": 1,
+                "max_delay": 10,
+                "backoff_factor": 1.2
+            }
+        }
+        
         while attempt < max_retries:
             attempt += 1
-            try:
-                async with self.sem:
+            
+            async with sem:
+                # Connection tracking
+                self.connection_pool["active_connections"] += 1
+                self.connection_pool["total_connections"] += 1
+                self.connection_pool["max_concurrent"] = max(
+                    self.connection_pool["max_concurrent"], 
+                    self.connection_pool["active_connections"]
+                )
+                
+                try:
                     r = await self.client.request(method, base_url + path, params=params, headers=headers)
-                
-                if r.status_code == 200:
-                    data = r.json()
-                    if ttl > 0:
-                        self._cache[cache_key] = (time.time(), data)
-                    return data
-                
-                if r.status_code == 429:
-                    self.metrics.rate_limited_requests += 1
-                    retry_after = int(r.headers.get("Retry-After", 1))
-                    delay = min(2 ** attempt, 60) + retry_after
-                    LOG.warning("Rate limited. Sleeping %ss", delay)
-                    await asyncio.sleep(delay)
-                    continue
-                
-                r.raise_for_status()
-                
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code >= 500:
-                    delay = min(2 ** attempt, 30)
-                    LOG.warning("Server error %s, retrying in %s", e.response.status_code, delay)
-                    await asyncio.sleep(delay)
-                    continue
-                else:
-                    self.metrics.failed_requests += 1
-                    raise
                     
-            except (httpx.RequestError, asyncio.TimeoutError) as e:
-                last_exception = e
-                self.metrics.failed_requests += 1
-                delay = min(2 ** attempt, 60)
-                LOG.error("Request error %s, retrying in %s", e, delay)
-                await asyncio.sleep(delay)
+                    if r.status_code == 200:
+                        data = r.json()
+                        if ttl > 0:
+                            self._cache[cache_key] = (time.time(), data)
+                        return data
+                    
+                    # Status code'a göre retry stratejisi seç
+                    status_category = "default"
+                    if r.status_code == 429:
+                        status_category = "429"
+                    elif str(r.status_code).startswith('5'):
+                        status_category = "5xx"
+                    
+                    strategy = retry_strategy[status_category]
+                    delay = min(strategy["base_delay"] * (strategy["backoff_factor"] ** attempt), 
+                               strategy["max_delay"])
+                    
+                    if r.status_code == 429:
+                        self.metrics.rate_limited_requests += 1
+                        retry_after = int(r.headers.get("Retry-After", 1))
+                        delay += retry_after
+                        LOG.warning("Rate limited. Sleeping %ss", delay)
+                    
+                    await asyncio.sleep(delay)
+                    continue
+                    
+                except httpx.HTTPStatusError as e:
+                    last_exception = e
+                    self.metrics.failed_requests += 1
+                    
+                    # Daha detaylı hata loglama
+                    error_info = {
+                        "method": method,
+                        "path": path,
+                        "params": params,
+                        "signed": signed,
+                        "futures": futures,
+                        "error": str(e),
+                        "status_code": e.response.status_code if hasattr(e, 'response') else None,
+                        "attempt": attempt
+                    }
+                    LOG.error(f"HTTP error: {json.dumps(error_info)}")
+                    
+                    if e.response.status_code >= 500:
+                        strategy = retry_strategy["5xx"]
+                        delay = min(strategy["base_delay"] * (strategy["backoff_factor"] ** attempt), 
+                                   strategy["max_delay"])
+                        LOG.warning("Server error %s, retrying in %s", e.response.status_code, delay)
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        raise
+                        
+                except (httpx.RequestError, asyncio.TimeoutError) as e:
+                    last_exception = e
+                    self.metrics.failed_requests += 1
+                    
+                    error_info = {
+                        "method": method,
+                        "path": path,
+                        "params": params,
+                        "signed": signed,
+                        "futures": futures,
+                        "error": str(e),
+                        "attempt": attempt
+                    }
+                    LOG.error(f"Request error: {json.dumps(error_info)}")
+                    
+                    strategy = retry_strategy["default"]
+                    delay = min(strategy["base_delay"] * (strategy["backoff_factor"] ** attempt), 
+                               strategy["max_delay"])
+                    await asyncio.sleep(delay)
+                
+                finally:
+                    self.connection_pool["active_connections"] -= 1
         
         raise last_exception or Exception(f"Max retries ({max_retries}) exceeded")
 
@@ -228,6 +369,10 @@ class BinanceHTTPClient:
 
     def get_metrics(self) -> RequestMetrics:
         return self.metrics
+
+    def get_connection_pool_stats(self) -> Dict[str, Any]:
+        """Connection pool istatistiklerini döndür"""
+        return self.connection_pool.copy()
 
     def reset_metrics(self):
         self.metrics = RequestMetrics()
@@ -246,11 +391,16 @@ class BinanceWebSocketManager:
         self._running = True
 
     async def _listen(self, stream_url: str, callback: Callable[[Dict[str, Any]], Any]):
-        while self._running:
+        reconnect_attempts = 0
+        max_reconnect_attempts = 10
+        
+        while self._running and reconnect_attempts < max_reconnect_attempts:
             try:
                 async with websockets.connect(stream_url, ping_interval=20, ping_timeout=10) as ws:
                     LOG.info(f"Connected to {stream_url}")
                     self.metrics.total_connections += 1
+                    reconnect_attempts = 0  # Reset on successful connection
+                    
                     async for msg in ws:
                         try:
                             self.metrics.messages_received += 1
@@ -258,10 +408,13 @@ class BinanceWebSocketManager:
                             asyncio.create_task(callback(data))
                         except Exception as cb_err:
                             LOG.error(f"Callback error: {cb_err}")
+                            
             except Exception as e:
+                reconnect_attempts += 1
                 self.metrics.failed_connections += 1
-                LOG.warning(f"WS error: {e}, reconnecting in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s")
-                await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
+                delay = min(2 ** reconnect_attempts, 60)  # Exponential backoff
+                LOG.warning(f"WS error: {e}, reconnecting in {delay}s (attempt {reconnect_attempts}/{max_reconnect_attempts})")
+                await asyncio.sleep(delay)
 
     async def subscribe(self, stream_name: str, callback: Callable):
         if stream_name not in self.connections:
@@ -661,6 +814,59 @@ class BinanceClient:
         
         return metrics
 
+    # --- YENİ: Batch Request Support ---
+    async def batch_request(self, requests: List[Dict[str, Any]]) -> List[Any]:
+        """Çoklu isteği paralelde yürüt"""
+        async def _execute_single_request(req):
+            try:
+                method = req.get("method", "GET")
+                endpoint = req.get("endpoint")
+                params = req.get("params", {})
+                signed = req.get("signed", False)
+                futures = req.get("futures", False)
+                priority = req.get("priority", "normal")
+                
+                return await self.http._request(method, endpoint, params, signed, futures, priority=priority)
+            except Exception as e:
+                return {"error": str(e), "request": req}
+        
+        # Tüm istekleri paralelde çalıştır
+        results = await asyncio.gather(
+            *[_execute_single_request(req) for req in requests],
+            return_exceptions=True
+        )
+        
+        return results
+
+    # --- YENİ: Detaylı Health Check ---
+    async def get_detailed_metrics(self) -> Dict[str, Any]:
+        """Detaylı performans metrikleri"""
+        http_metrics = self.get_http_metrics()
+        ws_metrics = self.get_ws_metrics()
+        conn_pool = self.http.get_connection_pool_stats()
+        
+        return {
+            "http": {
+                "total_requests": http_metrics.total_requests,
+                "failed_requests": http_metrics.failed_requests,
+                "success_rate": (http_metrics.total_requests - http_metrics.failed_requests) / max(http_metrics.total_requests, 1) * 100,
+                "cache_hits": http_metrics.cache_hits,
+                "cache_misses": http_metrics.cache_misses,
+                "cache_hit_rate": http_metrics.cache_hits / max(http_metrics.cache_hits + http_metrics.cache_misses, 1) * 100,
+                "rate_limited_requests": http_metrics.rate_limited_requests
+            },
+            "websocket": {
+                "total_connections": ws_metrics.total_connections,
+                "failed_connections": ws_metrics.failed_connections,
+                "messages_received": ws_metrics.messages_received,
+                "reconnections": ws_metrics.reconnections,
+                "active_connections": len(self.ws_manager.connections)
+            },
+            "connection_pool": conn_pool,
+            "circuit_breaker": binance_circuit_breaker.get_status(),
+            "timestamp": time.time()
+        }
+
     # --- Health Check ve Monitoring ---
     async def health_check(self) -> Dict[str, Any]:
         return {
@@ -671,11 +877,7 @@ class BinanceClient:
                 "hits": self.http.metrics.cache_hits,
                 "misses": self.http.metrics.cache_misses
             },
-            "circuit_breaker": {
-                "state": binance_circuit_breaker.state,
-                "failure_count": binance_circuit_breaker.failure_count,
-                "last_failure_time": binance_circuit_breaker.last_failure_time
-            },
+            "circuit_breaker": binance_circuit_breaker.get_status(),
             "timestamp": time.time(),
             "has_api_keys": bool(self.http.api_key and self.http.secret_key)
         }
@@ -686,9 +888,26 @@ class BinanceClient:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return {s: r for s, r in zip(symbols, results)}
 
-    async def close(self):
-        await self.ws_manager.close_all()
-        await self.http.close()
+    async def close(self, graceful: bool = True):
+        """Graceful shutdown"""
+        if graceful:
+            # Önce WebSocket bağlantılarını kapat
+            await self.ws_manager.close_all()
+            
+            # HTTP client'ı kapat
+            await self.http.close()
+            
+            # Cache'i temizle
+            self.http._cache.clear()
+        else:
+            # Forceful shutdown
+            tasks = []
+            if hasattr(self.ws_manager, 'close_all'):
+                tasks.append(self.ws_manager.close_all())
+            if hasattr(self.http, 'close'):
+                tasks.append(self.http.close())
+            
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def get_http_metrics(self) -> RequestMetrics:
         return self.http.get_metrics()
@@ -727,4 +946,3 @@ async def cleanup_binance_api():
     if binance_api:
         await binance_api.close()
         binance_api = None
-
