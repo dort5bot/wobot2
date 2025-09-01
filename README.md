@@ -18,12 +18,8 @@ Aşağıda hangi fonksiyonun API key gerektirdiği listelenmiştir.
 - `get_all_24h_tickers()` → Tüm semboller için 24h ticker
 - `get_all_symbols()` → Tüm sembol listesi
 - `exchange_info_details()` → Exchange metadata bilgisi
-
-Bu fonksiyonlar için **API key gerekmez**. Örnek kullanım:
-```python
-client = BinanceClient()
-data = await client.get_order_book("BTCUSDT")
-
+ ` ` `
+ ` ` `
 
 
 ✅ 
@@ -35,4 +31,35 @@ KİŞİSEL API (DB)
 -- Her kullanıcı için ayrı client
 --Real-time DB query + caching
 
-✅ 
+🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+🔶🔶🔶🔶🔶utils/binance_api.py🔶🔶🔶🔶🔶
+🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+1. ✅ Gelişmiş hata yönetimi - Detaylı logging ve error tracking
+2. ✅ Performans monitoring - Connection pool metrics ve detaylı istatistikler
+3. ✅ Akıllı retry mekanizması - Status code'a göre optimize edilmiş retry
+4. ✅ Priority tabanlı işleme - High/normal/low priority semaphore'lar
+5. ✅ Gelişmiş caching - Endpoint tipine göre farklı TTL stratejileri
+6. ✅ Batch processing - batch_request() metodu ile çoklu paralel istekler
+7. ✅ Dinamik rate limiting - Gerçek zamanlı limit yönetimi ve backoff
+8. ✅ Otomatik WebSocket recovery - Exponential backoff ile reconnect
+9. ✅ Graceful shutdown - Kaynakların düzgünce temizlenmesi
+10. ✅ Detaylı metrikler - get_detailed_metrics() ile kapsamlı monitoring
+
+
+
+🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+
+
+
+🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+
+
+
+
+
+
+
+
+
