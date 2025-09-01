@@ -1,30 +1,84 @@
-# handlers/ta_handler.py 902-0038
+# handlers/ta_handler.py 902-0038>>> 902-0125 ccxt uyumu
+# handlers/ta_handler.py
+
 import asyncio
 import pandas as pd
 from telegram import Update
 from telegram.ext import CommandHandler, CallbackContext
 from datetime import datetime
 import time
+import logging
 
 # Binance API
-from utils.binance_api import get_binance_client
+from utils.binance_api import get_global_binance_client
 from utils.config import CONFIG
 from utils.ta_utils import (
     calculate_all_ta_hybrid_async, 
     generate_signals,
-    klines_to_dataframe,
     health_check,
     get_cache_stats
 )
 
 # ------------------------------------------------------------
-# OHLCV Fetch
+# Logger
 # ------------------------------------------------------------
+logger = logging.getLogger("ta_handler")
+
+# ------------------------------------------------------------
+# OHLCV Fetch - CCXT Uyumlu
+# ------------------------------------------------------------
+def map_interval_to_timeframe(interval: str) -> str:
+    """Telegram interval'ını CCXT timeframe'ine dönüştür"""
+    mapping = {
+        '1m': '1m',
+        '5m': '5m', 
+        '15m': '15m',
+        '30m': '30m',
+        '1h': '1h',
+        '4h': '4h',
+        '1d': '1d',
+        '1w': '1w'
+    }
+    return mapping.get(interval, '1h')
+
 async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.DataFrame:
-    client = get_binance_client(None, None)
-    limit = max(hours * 3, 200)
-    klines = await client.get_klines(symbol, interval=interval, limit=limit)
-    return klines_to_dataframe(klines)
+    """CCXT ile OHLCV verisi al"""
+    try:
+        client = await get_global_binance_client()
+        
+        if client is None:
+            logger.error("Binance client not available")
+            return pd.DataFrame()
+            
+        # Timeframe mapping
+        timeframe = map_interval_to_timeframe(interval)
+        
+        # Timestamp hesapla
+        since = None
+        if hours > 0:
+            since = int((time.time() - hours * 3600) * 1000)
+        
+        # CCXT ile OHLCV verisi al
+        ohlcv = await client.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=200)
+        
+        if not ohlcv or len(ohlcv) == 0:
+            return pd.DataFrame()
+        
+        # CCXT formatını DataFrame'e dönüştür
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        
+        # Sayısal kolonları dönüştür
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+        return df
+        
+    except Exception as e:
+        logger.error(f"OHLCV fetch error for {symbol}: {e}")
+        return pd.DataFrame()
 
 # ------------------------------------------------------------
 # Yardımcı Fonksiyonlar
@@ -106,7 +160,8 @@ async def scan_market(symbols: list = None, interval: str = "1h", hours: int = 4
             if len(df) < 20:
                 continue
                 
-            ta_results = await calculate_all_ta_hybrid_async(df, symbol)
+            # ✅ 3 parametre ile çağır (df, symbol, max_workers=None)
+            ta_results = await calculate_all_ta_hybrid_async(df, symbol, None)
             signal_result = generate_signals(df)
             alpha_details = signal_result.get('alpha_details', {})
             
@@ -122,7 +177,7 @@ async def scan_market(symbols: list = None, interval: str = "1h", hours: int = 4
             }
             
         except Exception as e:
-            print(f"{symbol} analiz hatası: {e}")
+            logger.error(f"{symbol} analiz hatası: {e}")
             continue
     
     return results
@@ -332,7 +387,8 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     await context.bot.send_message(chat_id=chat_id, text="⚠️ Yetersiz veri")
                     return
                 
-                ta_results = await calculate_all_ta_hybrid_async(df, coin)
+                # ✅ 3 parametre ile çağır
+                ta_results = await calculate_all_ta_hybrid_async(df, coin, None)
                 signal_result = generate_signals(df)
                 alpha_details = signal_result.get('alpha_details', {})
                 
@@ -355,6 +411,7 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                 await context.bot.send_message(chat_id=chat_id, text=text)
 
         except Exception as e:
+            logger.error(f"TA handler error: {e}")
             await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {str(e)}")
 
     asyncio.ensure_future(_run())
