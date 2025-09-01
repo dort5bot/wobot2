@@ -49,6 +49,9 @@ class WSMetrics:
 # -------------------------------------------------------------
 # Circuit Breaker Pattern
 # -------------------------------------------------------------
+import time
+from typing import Dict, Any
+
 class CircuitBreaker:
     def __init__(self, failure_threshold: int = 5, reset_timeout: int = 60):
         self.failure_threshold = failure_threshold
@@ -56,6 +59,16 @@ class CircuitBreaker:
         self.failure_count = 0
         self.last_failure_time = 0
         self.state = "CLOSED"
+
+    # CircuitBreaker sınıfına ekle:
+    def get_status(self) -> Dict[str, Any]:
+        return {
+            "state": self.state,
+            "failure_count": self.failure_count,
+            "last_failure_time": self.last_failure_time,
+            "failure_threshold": self.failure_threshold,
+            "reset_timeout": self.reset_timeout
+        }
 
     async def execute(self, func, *args, **kwargs):
         if self.state == "OPEN":
@@ -714,3 +727,4 @@ async def cleanup_binance_api():
     if binance_api:
         await binance_api.close()
         binance_api = None
+
