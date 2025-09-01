@@ -1,4 +1,4 @@
-# jobs/worker_d.py
+# jobs/worker_d.py 901 -2235
 '''
 Trading Pipeline Entegrasyonu içindir
 ta_utils.py ile ilişkilidir
@@ -8,7 +8,9 @@ import asyncio
 import logging
 from contextlib import suppress
 
-from utils.binance_api import get_binance_api
+# ❌ Eski: from utils.binance_api import get_binance_api
+# ✅ Yeni: 
+from utils.binance_api import get_binance_client
 from utils.ta_utils import calculate_all_ta_hybrid, generate_signals, klines_to_dataframe
 from utils.config import CONFIG   # ✅ CONFIG import edildi
 
@@ -20,6 +22,7 @@ class WorkerD:
         self.signal_callback = signal_callback
         self._running = False
         self._task = None
+        self.client = get_binance_client(None, None)  # ✅ Global instance'ı kullan
 
     async def start_async(self):
         self._running = True
@@ -36,12 +39,13 @@ class WorkerD:
 
     async def _trading_loop(self, symbol: str = "BTCUSDT", interval: str = "1m"):
         """Gerçek zamanlı trading pipeline"""
-        client = get_binance_api()
+        # ❌ Eski: client = get_binance_api()
+        # ✅ Yeni: self.client zaten init'te oluşturuldu
 
         while self._running:
             try:
                 # 1. Veriyi çek
-                klines = await client.get_klines(symbol, interval, limit=100)
+                klines = await self.client.get_klines(symbol, interval, limit=100)
                 df = klines_to_dataframe(klines)
 
                 # 2. TA hesapla
