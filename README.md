@@ -49,7 +49,14 @@ KİŞİSEL API (DB)
 
 🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
 🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
+utils/init_db.py
 
+✅ Otomatik schema migration (eksik kolonları ekler)
+✅ Index optimizasyonları
+✅ Foreign key desteği
+✅ Integrity check fonksiyonu
+✅ Daha profesyonel logging
+✅ Daha kapsamlı tablo yapısı
 
 
 🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶🔶
