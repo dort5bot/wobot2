@@ -1,3 +1,4 @@
+# utils/order_manager.py 901-2250
 # utils/order_manager.py
 import os
 import logging
@@ -13,7 +14,9 @@ PAPER_MODE = os.getenv("PAPER_MODE", "true").lower() in ("1", "true", "yes")
 
 class OrderManager:
     def __init__(self, risk_per_trade: float = 0.01, leverage: int = 1, paper_mode: Optional[bool] = None):
-        self.api = get_binance_api()  # ✅ Global API instance
+        # ❌ Eski: self.api = get_binance_api()
+        # ✅ Yeni: API key'leri config'ten al veya None olarak geç
+        self.api = get_binance_client(None, None)  # Global instance'ı kullan
         self.risk_per_trade = risk_per_trade
         self.leverage = leverage
         self.paper_mode = PAPER_MODE if paper_mode is None else paper_mode
