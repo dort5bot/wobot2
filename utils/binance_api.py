@@ -12,7 +12,8 @@
 ✅ WebSocket otomatik recovery
 ✅ Graceful shutdown
 ✅ Detaylı metrikler ve monitoring
-user_id parametresi KALDIRILDI, direkt api_key/secret_key alıyor
+.env den aldığı kişisel api ile, api gerektiren verileri çeker
+gerekmeyenler için global kullanılabilir
 '''
 
 import os
@@ -45,8 +46,7 @@ if not LOG.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
-
-
+    
 # -------------------------------------------------------------
 # binance_api işlemleri global ve kişisel,
 # -------------------------------------------------------------
@@ -65,13 +65,13 @@ class BinanceAPI:
             
             if api_key and api_secret:
                 self.global_client = await AsyncClient.create(api_key, api_secret)
-                logger.info("Global Binance client .env API key ile oluşturuldu")
+                LOG.info("Global Binance client .env API key ile oluşturuldu")
             else:
                 self.global_client = await AsyncClient.create()
-                logger.warning(".env'de API key bulunamadı, anonymous client oluşturuldu")
+                LOG.warning(".env'de API key bulunamadı, anonymous client oluşturuldu")
                 
         except Exception as e:
-            logger.error(f"Global client oluşturulamadı: {e}")
+            LOG.error(f"Global client oluşturulamadı: {e}")
             self.global_client = await AsyncClient.create()  # fallback to anonymous
 
 # Singleton instance
@@ -82,7 +82,6 @@ async def get_global_binance_client():
     if binance_api.global_client is None:
         await binance_api.initialize_global_client()
     return binance_api.global_client
-
 
 # -------------------------------------------------------------
 # Enum'lar ve Sabitler
@@ -947,5 +946,6 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
     return binance_client
 
 # EOF
+
 
 
