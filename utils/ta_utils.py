@@ -949,3 +949,84 @@ async def health_check() -> Dict[str, Any]:
 
     }
 
+
+# Hata yönetimi
+def rsi(arr: list, period: int = 14) -> list:
+    """Calculate RSI for a price array"""
+    try:
+        if len(arr) < period + 1:
+            return []
+            
+        gains = []
+        losses = []
+        
+        for i in range(1, len(arr)):
+            change = arr[i] - arr[i-1]
+            gains.append(change if change > 0 else 0)
+            losses.append(-change if change < 0 else 0)
+        
+        # Calculate first average gains and losses
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        
+        rsi_values = []
+        for i in range(period, len(gains)):
+            if avg_loss == 0:
+                rsi = 100
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+            
+            rsi_values.append(rsi)
+            
+            # Update averages
+            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        
+        return rsi_values
+    except Exception as e:
+        logging.error(f"RSI calculation error: {e}")
+        return []
+
+def macd(arr: list, fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> tuple:
+    """Calculate MACD for a price array"""
+    try:
+        if len(arr) < slow_period + signal_period:
+            return [], [], []
+            
+        # Calculate EMAs
+        ema_fast = _calculate_ema(arr, fast_period)
+        ema_slow = _calculate_ema(arr, slow_period)
+        
+        # Calculate MACD line
+        macd_line = [ema_fast[i] - ema_slow[i] for i in range(len(ema_fast))]
+        
+        # Calculate Signal line (EMA of MACD line)
+        signal_line = _calculate_ema(macd_line, signal_period)
+        
+        # Calculate Histogram
+        histogram = [macd_line[i] - signal_line[i] for i in range(len(signal_line))]
+        
+        return macd_line, signal_line, histogram
+    except Exception as e:
+        logging.error(f"MACD calculation error: {e}")
+        return [], [], []
+
+def _calculate_ema(prices: list, period: int) -> list:
+    """Calculate Exponential Moving Average"""
+    if len(prices) < period:
+        return []
+    
+    ema_values = []
+    multiplier = 2 / (period + 1)
+    
+    # First EMA is SMA
+    sma = sum(prices[:period]) / period
+    ema_values.append(sma)
+    
+    # Calculate subsequent EMAs
+    for i in range(period, len(prices)):
+        ema = (prices[i] - ema_values[-1]) * multiplier + ema_values[-1]
+        ema_values.append(ema)
+    
+    return ema_values
