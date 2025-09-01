@@ -474,13 +474,30 @@ def breakout(df: pd.DataFrame, period: int = 20) -> pd.Series:
 async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
     """Binance'den gerçek funding rate çeker."""
     try:
-        from utils.binance_api import get_binance_api
-        client = get_binance_api()
+        # ❌ Eski: from utils.binance_api import get_binance_api
+        # ✅ Yeni:
+        from utils.binance_api import get_binance_client
+        client = get_binance_client(None, None)  # Global instance'ı kullan
         funding_data = await client.get_funding_rate(symbol, limit=1)
         return float(funding_data[0]['fundingRate']) if funding_data else 0.001
     except Exception as e:
         logger.error(f"Funding rate çekilemedi: {e}")
         return 0.001  # Fallback değer
+
+async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
+    """Gerçek zamanlı order book imbalance hesaplar."""
+    try:
+        # ❌ Eski: from utils.binance_api import get_binance_api
+        # ✅ Yeni:
+        from utils.binance_api import get_binance_client
+        client = get_binance_client(None, None)  # Global instance'ı kullan
+        ob = await client.get_order_book(symbol, limit=100)
+        bids = [[float(b[0]), float(b[1])] for b in ob['bids']]
+        asks = [[float(a[0]), float(a[1])] for a in ob['asks']]
+        return order_book_imbalance(bids, asks)
+    except Exception as e:
+        logger.error(f"Order book imbalance hesaplanamadı: {e}")
+        return 0.0  # Fallback değer
 
 async def fetch_social_sentiment_binance(symbol: str = "BTC") -> Dict[str, float]:
     """Social sentiment için placeholder."""
@@ -491,18 +508,6 @@ async def fetch_social_sentiment_binance(symbol: str = "BTC") -> Dict[str, float
         logger.error(f"Social sentiment çekilemedi: {e}")
         return {"sentiment": 0.5}  # Fallback değer
 
-async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
-    """Gerçek zamanlı order book imbalance hesaplar."""
-    try:
-        from utils.binance_api import get_binance_api
-        client = get_binance_api()
-        ob = await client.get_order_book(symbol, limit=100)
-        bids = [[float(b[0]), float(b[1])] for b in ob['bids']]
-        asks = [[float(a[0]), float(a[1])] for a in ob['asks']]
-        return order_book_imbalance(bids, asks)
-    except Exception as e:
-        logger.error(f"Order book imbalance hesaplanamadı: {e}")
-        return 0.0  # Fallback değer
 
 # =============================================================
 # Registry
@@ -549,8 +554,10 @@ async def optimized_trading_pipeline(symbol: str = "BTCUSDT",
     logger = logging.getLogger("ta_pipeline")
     
     try:
-        from utils.binance_api import get_binance_api
-        client = get_binance_api()
+        # ❌ Eski: from utils.binance_api import get_binance_api
+        # ✅ Yeni:
+        from utils.binance_api import get_binance_client
+        client = get_binance_client(None, None)  # Global instance'ı kullan
     except ImportError:
         logger.error("Binance API modülü yüklenemedi")
         return
@@ -827,40 +834,42 @@ def sample_entropy(series: pd.Series, m: Optional[int] = None, r_factor: Optiona
 def market_regime(series: pd.Series, window: Optional[int] = None) -> pd.Series:
     """
     Market regime (trending/mean-reverting) skoru hesaplar.
+    Basitleştirilmiş versiyon - Hurst exponent yerine basit trend analizi.
     """
     try:
         if window is None:
             window = getattr(CONFIG.TA, "REGIME_WINDOW", 80)
 
-        returns = series.pct_change().dropna()
-        if len(returns) < window:
-            # Yeterli veri yoksa default değer döndür
+        if len(series) < window:
             return pd.Series([0.5] * len(series), index=series.index, name="regime")
 
-        hurst_exp = []
-        for i in range(window, len(returns) + 1):
-            r = returns.iloc[i - window:i]
-            lags = range(2, min(20, len(r)))
-            if len(r) < 2:  # En az 2 data point gerekli
-                hurst_exp.append(0.5)
+        # Basit trend tespiti
+        regime_scores = []
+        for i in range(len(series)):
+            if i < window:
+                regime_scores.append(0.5)
                 continue
                 
-            tau = [np.sqrt(np.std(np.subtract(r[lag:].values, r[:-lag].values))) for lag in lags if len(r[lag:]) > 0 and len(r[:-lag]) > 0]
-            if not tau:  # tau listesi boşsa
-                hurst_exp.append(0.5)
+            window_data = series.iloc[i-window:i]
+            if len(window_data) < 2:
+                regime_scores.append(0.5)
                 continue
                 
-            try:
-                poly = np.polyfit(np.log(lags[:len(tau)]), np.log(tau), 1)
-                hurst_exp.append(poly[0] * 2.0)
-            except (ValueError, TypeError):
-                hurst_exp.append(0.5)
-
-        # NaN'ları doldur ve uzunluğu series ile eşleştir
-        hurst_series = pd.Series([np.nan] * (window - 1) + hurst_exp, index=series.index)
-        hurst_series = hurst_series.reindex(series.index, fill_value=0.5)  # Eksik indexleri 0.5 ile doldur
-        hurst_series = hurst_series.fillna(method='bfill').fillna(0.5)
-        return hurst_series
+            # Linear regression slope ile trend tespiti
+            x = np.arange(len(window_data))
+            y = window_data.values
+            slope = np.polyfit(x, y, 1)[0]
+            
+            # Slope'u 0-1 aralığına normalize et
+            normalized_slope = 0.5 + (slope / (2 * np.std(y) + 1e-12))
+            regime_scores.append(np.clip(normalized_slope, 0.0, 1.0))
+        
+        # Eksik değerleri doldur
+        regime_series = pd.Series(regime_scores, index=series.index)
+        regime_series = regime_series.ffill().bfill().fillna(0.5)
+        
+        return regime_series
+        
     except Exception as e:
         logger.error(f"Market regime hesaplanırken hata: {e}")
         return pd.Series([0.5] * len(series), index=series.index, name="regime")
@@ -1215,4 +1224,5 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
