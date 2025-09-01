@@ -49,6 +49,7 @@ class BinanceConfig:
 
     TRADES_LIMIT: int = int(os.getenv("TRADES_LIMIT", "500"))
     WHALE_USD_THRESHOLD: float = float(os.getenv("WHALE_USD_THRESHOLD", "50000"))
+    FUNDING_RATE_THRESHOLD: float = float(os.getenv("FUNDING_RATE_THRESHOLD", "0.01"))
     FUNDING_POLL_INTERVAL: int = int(os.getenv("FUNDING_POLL_INTERVAL", "5"))
 
     LOG_LEVEL: int = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
@@ -232,4 +233,5 @@ def reload_config():
     global CONFIG
     get_config.cache_clear()
     CONFIG = get_config()
+
 
