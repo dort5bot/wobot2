@@ -1,4 +1,4 @@
-#jobs/worker_b.py
+#jobs/worker_b.py 901-2242
 '''
 Pipeline: consumer (ingest) + worker pool (process)
 - CPU dostu: wait_for timeout + kısa uyku
@@ -134,6 +134,7 @@ class WorkerB:
                     lock = self._locks[symbol]
                     
                     async with lock:
+                        # defaultdict sayesinde otomatik olarak deque oluşur
                         dq = self._candles[symbol]
                         dq.append({
                             "ts": ts,
@@ -144,26 +145,32 @@ class WorkerB:
                             "volume": v,
                         })
 
+                        # Minimum mum sayısına ulaşmadan sinyal üretme
                         if len(dq) < self.min_candles:
                             continue
 
+                        # DataFrame oluştur (dict'lerden otomatik column isimleri alınır)
                         df = pd.DataFrame(list(dq)).set_index("ts")
 
+                        # Teknik analiz sinyallerini üret
                         sig_res = ta_utils.generate_signals(df)
                         signal_val = sig_res.get("signal", 0)
                         
+                        # Sinyal yoksa devam et
                         if signal_val == 0:
                             continue
                             
                         score = float(sig_res.get("score", 0.0))
                         alpha_score = sig_res.get("alpha_ta", {}).get("score", 0.0)
 
+                        # Cooldown kontrolü
                         now = time.time()
                         last_signal_ts = self._last_signal_ts.get(symbol, 0)
                         
                         if (now - last_signal_ts) < self.cooldown:
                             continue
 
+                        # Sinyal gönderimi
                         side = "BUY" if signal_val == 1 else "SELL"
                         decision = {
                             "symbol": symbol, 
@@ -203,6 +210,7 @@ class WorkerB:
             LOG.info("WorkerB worker cancelled (id=%s)", wid)
 
     def get_stats(self) -> Dict[str, Any]:
+        """Çalışma istatistiklerini döndürür"""
         return {
             "running": self._running,
             "candle_symbols": len(self._candles),
@@ -213,8 +221,9 @@ class WorkerB:
         }
 
     def get_symbol_data(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Belirtilen sembolün mevcut verilerini döndürür"""
         if symbol not in self._candles or not self._candles[symbol]:
             return None
+        
         dq = self._candles[symbol]
         return pd.DataFrame(list(dq)).set_index("ts")
-#EOF
