@@ -16,6 +16,8 @@
 gerekmeyenler için global kullanılabilir
 '''
 
+# utils/binance_api.py
+
 import os
 import time
 import hmac
@@ -33,8 +35,9 @@ from dataclasses import dataclass
 from collections import defaultdict
 from enum import Enum
 
+import ccxt.async_support as ccxt  # ✅ CCXT ile değiştir
+
 from utils.config import CONFIG
-from binance import AsyncClient, BinanceSocketManager
 
 # -------------------------------------------------------------
 # Logger - Tüm dosyada tutarlı logging
@@ -46,33 +49,53 @@ if not LOG.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
-    
+
 # -------------------------------------------------------------
-# binance_api işlemleri global ve kişisel,
+# CCXT-based BinanceAPI
 # -------------------------------------------------------------
 
 class BinanceAPI:
     def __init__(self):
-        self.clients = {}  # user_id -> client mapping
+        self.clients = {}  # api_key -> client mapping
         self.global_client = None
         self.lock = asyncio.Lock()
     
     async def initialize_global_client(self):
-        """.env'deki API key ile global client oluştur"""
+        """.env'deki API key ile global client oluştur - CCXT version"""
         try:
             api_key = os.getenv('BINANCE_API_KEY')
             api_secret = os.getenv('BINANCE_API_SECRET')
             
+            config = {
+                'enableRateLimit': True,
+                'rateLimit': 1000,  # ms
+                'options': {
+                    'defaultType': 'spot',  # veya 'future'
+                    'adjustForTimeDifference': True,
+                }
+            }
+            
             if api_key and api_secret:
-                self.global_client = await AsyncClient.create(api_key, api_secret)
-                LOG.info("Global Binance client .env API key ile oluşturuldu")
+                config['apiKey'] = api_key
+                config['secret'] = api_secret
+                self.global_client = ccxt.binance(config)
+                LOG.info("Global Binance client (CCXT) .env API key ile oluşturuldu")
             else:
-                self.global_client = await AsyncClient.create()
-                LOG.warning(".env'de API key bulunamadı, anonymous client oluşturuldu")
+                self.global_client = ccxt.binance(config)
+                LOG.warning(".env'de API key bulunamadı, anonymous CCXT client oluşturuldu")
+                
+            # CCXT client'ını load markets ile initialize et
+            await self.global_client.load_markets()
                 
         except Exception as e:
-            LOG.error(f"Global client oluşturulamadı: {e}")
-            self.global_client = await AsyncClient.create()  # fallback to anonymous
+            LOG.error(f"Global client (CCXT) oluşturulamadı: {e}")
+            # Fallback
+            try:
+                self.global_client = ccxt.binance({'enableRateLimit': True})
+                await self.global_client.load_markets()
+            except Exception as fallback_error:
+                LOG.error(f"Fallback CCXT client da oluşturulamadı: {fallback_error}")
+                self.global_client = None
 
 # Singleton instance
 binance_api = BinanceAPI()
@@ -946,6 +969,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
     return binance_client
 
 # EOF
+
 
 
 
