@@ -1,4 +1,6 @@
 # utils/init_db.py
+# utils/db.py → Trading simülasyonu ve strateji testi
+# utils/init_db.py → Gerçek kullanıcı verileri ve production
 import sqlite3
 import logging
 from typing import Dict, List
