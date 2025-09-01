@@ -3,6 +3,18 @@ wobot1 = robot1
 
 worker yapısına gecis
 
+============================================
+önce kaynak: binance > herşey buna bağlı
+* herşey dahil edilmeli
+* spot-future -vb
+* hata kontrol vb
+* max pro yapılmalı
+* *geliştirmelerde isim değişmeden kalmak zorunda
+* SONRA bunun üstüne entegre edilmeli herşey
+
+
+=============================================
+
 
 # BinanceClient Kullanım Kılavuzu
 
