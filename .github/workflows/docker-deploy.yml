@@ -1,0 +1,216 @@
+# 🟥3🟥🟥.github/workflows/docker-deploy.yml
+# 🚀 Docker Build & Deploy (Render / Railway / Oracle VPS Auto Detect)
+# Secrets: GHCR_PAT, RENDER_DEPLOY_HOOK?, RAILWAY_DEPLOY_HOOK?, ORACLE_*?
+# 	Secret Adı	Açıklama
+# 	GHCR_PAT	GitHub Container Registry için token (write:packages)
+# 	RENDER_DEPLOY_HOOK	Render deploy URL (opsiyonel)
+# 	RAILWAY_DEPLOY_HOOK	Railway deploy URL (opsiyonel)
+# 	ORACLE_HOST	Oracle VPS IP adresi (opsiyonel)
+# 	ORACLE_SSH_KEY	Oracle VPS'e bağlanmak için private SSH key
+# 	ORACLE_USER (opsiyonel)	SSH kullanıcı adı (default: ubuntu)
+
+name: Docker Build & Deploy (Multi-Platform)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=,format=short
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64  # ✅ Multi-arch desteği
+
+      ######################################################
+      ## Notifications: Build Success
+      ######################################################
+      - name: Notify Build Success
+        if: success()
+        run: |
+          echo "✅ Docker image built and pushed successfully!"
+          echo "Image: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+
+      ######################################################
+      ## Conditional Deploy: Render
+      ######################################################
+      - name: Deploy to Render (if hook exists)
+        if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
+        run: |
+          echo "🔁 Deploying to Render..."
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            --retry 3 \
+            --retry-delay 5 \
+            ${{ secrets.RENDER_DEPLOY_HOOK }})
+          
+          if [ "$response" -eq 200 ]; then
+            echo "✅ Render deploy triggered successfully"
+          else
+            echo "❌ Render deploy failed with HTTP $response"
+            exit 1
+          fi
+
+      ######################################################
+      ## Conditional Deploy: Railway
+      ######################################################
+      - name: Deploy to Railway (if hook exists)
+        if: ${{ secrets.RAILWAY_DEPLOY_HOOK != '' }}
+        run: |
+          echo "🔁 Deploying to Railway..."
+          response=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Content-Type: application/json" \
+            --retry 3 \
+            --retry-delay 5 \
+            ${{ secrets.RAILWAY_DEPLOY_HOOK }})
+          
+          if [ "$response" -eq 200 ]; then
+            echo "✅ Railway deploy triggered successfully"
+          else
+            echo "❌ Railway deploy failed with HTTP $response"
+            exit 1
+          fi
+
+      ######################################################
+      ## Conditional Deploy: Oracle VPS via SSH
+      ######################################################
+      - name: Deploy to Oracle (if SSH config exists)
+        if: ${{ secrets.ORACLE_HOST != '' && secrets.ORACLE_SSH_KEY != '' }}
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          echo "🔁 Preparing Oracle VPS deployment..."
+          
+          # SSH key'i güvenli şekilde yaz
+          echo "$ORACLE_SSH_KEY" > private_key.pem
+          chmod 600 private_key.pem
+          
+          # SSH connection test
+          echo "Testing SSH connection..."
+          ssh -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} "echo 'SSH connection successful'"
+          
+          echo "🚀 Deploying to Oracle VPS..."
+          ssh -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} << 'EOF'
+            echo "Pulling latest image..."
+            docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
+            
+            echo "Stopping existing container..."
+            docker stop app || true
+            docker rm app || true
+            
+            echo "Starting new container..."
+            docker run -d \
+              --name app \
+              -p 80:3000 \
+              -e PORT=3000 \
+              -e NODE_ENV=production \
+              --restart unless-stopped \
+              --health-cmd="curl -f http://localhost:3000/health || exit 1" \
+              --health-interval=30s \
+              --health-timeout=3s \
+              --health-retries=3 \
+              ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
+            
+            echo "✅ Deployment completed successfully!"
+            echo "Container status:"
+            docker ps --filter "name=app" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          EOF
+          
+          # Cleanup sensitive key
+          rm -f private_key.pem
+
+      ######################################################
+      ## Conditional Deploy: Docker Compose (Alternatif)
+      ######################################################
+      - name: Deploy with Docker Compose (if compose file exists)
+        if: ${{ secrets.ORACLE_HOST != '' && secrets.ORACLE_SSH_KEY != '' && hashFiles('docker-compose.yml') }}
+        env:
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          echo "🔁 Deploying with Docker Compose..."
+          echo "$ORACLE_SSH_KEY" > private_key.pem
+          chmod 600 private_key.pem
+          
+          # Docker Compose dosyasını kopyala ve çalıştır
+          scp -i private_key.pem -o StrictHostKeyChecking=no docker-compose.yml ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }}:~/app/
+          
+          ssh -i private_key.pem -o StrictHostKeyChecking=no ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} << 'EOF'
+            cd ~/app
+            docker-compose pull
+            docker-compose up -d --force-recreate
+            docker-compose ps
+          EOF
+          
+          rm -f private_key.pem
+
+      ######################################################
+      ## Fallback: No Deploy Target
+      ######################################################
+      - name: No Deploy Target Found
+        if: ${{ secrets.RENDER_DEPLOY_HOOK == '' && secrets.RAILWAY_DEPLOY_HOOK == '' && (secrets.ORACLE_HOST == '' || secrets.ORACLE_SSH_KEY == '') }}
+        run: |
+          echo "⚠️ No deploy target detected. Skipping deployment."
+          echo "Available images:"
+          echo "ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.tags }}"
+
+      ######################################################
+      ## Notifications: Summary
+      ######################################################
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "📊 Deployment Summary"
+          echo "Repository: ${{ github.repository }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "SHA: ${{ github.sha }}"
+          echo "Image: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+          echo "Status: ${{ job.status }}"
+
