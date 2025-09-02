@@ -1,4 +1,4 @@
-# handlers/ta_handler.py
+# handlers/ta_handler.py902-1953
 
 import asyncio
 import pandas as pd
@@ -72,6 +72,10 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     symbols = [t["symbol"] for t in top_sorted[:top_n]]
                     mode = f"top{top_n}"
 
+                # Referans seri için BTC verisi al
+                btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+                ref_close = btc_df["close"] if btc_df is not None else None
+
                 # veri çek
                 data = {}
                 for sym in symbols:
@@ -81,14 +85,12 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                     except Exception:
                         continue
 
-                btc_ref = data.get("BTCUSDT", None)
-                ref_close = btc_ref["close"] if btc_ref is not None else None
                 results = scan_market(data, ref_close=ref_close)
 
                 text = f"📊 Market Scan (4h, mode={mode})\n"
                 for sym, res in results.items():
-                    score = res.get("score", 0.0)
-                    sig = res.get("signal", 0)
+                    score = res["alpha_ta"].get("score", 0.0)
+                    sig = res["alpha_ta"].get("signal", 0)
                     sig_txt = "LONG" if sig == 1 else ("SHORT" if sig == -1 else "FLAT")
                     regime = res.get("detail", {}).get("regime_score", 0.0)
                     text += f"{sym}: α={round(score,2)} [{sig_txt}] | Rejim={regime_label(regime)}\n"
@@ -106,8 +108,8 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
             ref_close = btc_df["close"] if btc_df is not None else None
 
             res = alpha_signal(df, ref_series=ref_close)
-            score = res["score"]
-            sig = res["signal"]
+            score = res["alpha_ta"].get("score", 0.0)
+            sig = res["alpha_ta"].get("signal", 0)
             sig_txt = "LONG" if sig == 1 else ("SHORT" if sig == -1 else "FLAT")
             regime = res["detail"].get("regime_score", 0.0)
             entropy = res["detail"].get("entropy_score", 0.0)
@@ -139,14 +141,20 @@ def tt_handler(update: Update, context: CallbackContext) -> None:
 
     async def _run():
         try:
-            results = scan_market({})
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if btc_df is not None else None
+            
+            results = scan_market({}, ref_close=ref_close)
             trend_coins = [
                 (sym, res) for sym, res in results.items()
                 if res.get("detail", {}).get("regime_score", 0) > 0.5
             ]
-            text = "📈 TREND Coin’ler\n"
+            text = "📈 TREND Coin'ler\n"
             for sym, res in trend_coins[:10]:
-                text += f"{sym}: α={round(res['score'],2)} [{res['signal']}] | Rejim=trend\n"
+                score = res["alpha_ta"].get("score", 0.0)
+                sig = res["alpha_ta"].get("signal", 0)
+                text += f"{sym}: α={round(score,2)} [{sig}] | Rejim=trend\n"
             await context.bot.send_message(chat_id=chat_id, text=text)
         except Exception as e:
             await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
@@ -162,14 +170,20 @@ def tc_handler(update: Update, context: CallbackContext) -> None:
 
     async def _run():
         try:
-            results = scan_market({})
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if btc_df is not None else None
+            
+            results = scan_market({}, ref_close=ref_close)
             crash_coins = [
                 (sym, res) for sym, res in results.items()
                 if res.get("detail", {}).get("regime_score", 0) < -0.5
             ]
-            text = "📉 CRASH Coin’ler\n"
+            text = "📉 CRASH Coin'ler\n"
             for sym, res in crash_coins[:10]:
-                text += f"{sym}: α={round(res['score'],2)} [{res['signal']}] | Rejim=crash\n"
+                score = res["alpha_ta"].get("score", 0.0)
+                sig = res["alpha_ta"].get("signal", 0)
+                text += f"{sym}: α={round(score,2)} [{sig}] | Rejim=crash\n"
             await context.bot.send_message(chat_id=chat_id, text=text)
         except Exception as e:
             await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
@@ -185,14 +199,20 @@ def tr_handler(update: Update, context: CallbackContext) -> None:
 
     async def _run():
         try:
-            results = scan_market({})
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if btc_df is not None else None
+            
+            results = scan_market({}, ref_close=ref_close)
             range_coins = [
                 (sym, res) for sym, res in results.items()
                 if -0.5 <= res.get("detail", {}).get("regime_score", 0) <= 0.5
             ]
-            text = "🔄 RANGE Coin’ler\n"
+            text = "🔄 RANGE Coin'ler\n"
             for sym, res in range_coins[:10]:
-                text += f"{sym}: α={round(res['score'],2)} [{res['signal']}] | Rejim=range\n"
+                score = res["alpha_ta"].get("score", 0.0)
+                sig = res["alpha_ta"].get("signal", 0)
+                text += f"{sym}: α={round(score,2)} [{sig}] | Rejim=range\n"
             await context.bot.send_message(chat_id=chat_id, text=text)
         except Exception as e:
             await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
@@ -228,7 +248,11 @@ def tm_handler(update: Update, context: CallbackContext) -> None:
 
     async def _run():
         try:
-            results = scan_market({})
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if btc_df is not None else None
+            
+            results = scan_market({}, ref_close=ref_close)
             total = len(results)
             trend = sum(1 for r in results.values() if r.get("detail", {}).get("regime_score", 0) > 0.5)
             crash = sum(1 for r in results.values() if r.get("detail", {}).get("regime_score", 0) < -0.5)
