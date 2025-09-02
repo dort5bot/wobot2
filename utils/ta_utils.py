@@ -1,4 +1,4 @@
-#utils/ta_utils.py 902-1553
+# utils/ta_utils.py 902-1553
 from __future__ import annotations
 
 import numpy as np
@@ -10,7 +10,7 @@ import time
 import logging
 import threading
 from typing import Dict, Optional, Tuple, List, Any, Callable, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import defaultdict, OrderedDict
 import functools
 import inspect
@@ -725,7 +725,6 @@ def stochastic(df: pd.DataFrame, k_period: Optional[int] = None, d_period: Optio
         return nan_series, nan_series
 
 # =============================================================
-# Volatilite
 # Volatilite & Risk İndikatörleri - TAMAMEN GÜNCELLENMİŞ
 # =============================================================
 
@@ -1313,7 +1312,6 @@ def calculate_all_ta_hybrid(df: pd.DataFrame, symbol: str = "default",
 
 # =============================================================
 # Advanced Signal Stack: alpha_ta - ESKİ KODDAN AKTARILDI ve GELİŞTİRİLDİ
-# Advanced Signal Stack: alpha_ta - ESKİ KODDAN AKTARILDI
 # =============================================================
 
 # --- 1) Kalman:
@@ -1642,7 +1640,7 @@ TA_FUNCTIONS = {
 }
 
 # =============================================================
-# Generate Signals ve Scan Market Fonksiyonları - GÜNCELLENMİŞ-7
+# Generate Signals ve Scan Market Fonksiyonları - GÜNCELLENMİŞ
 # =============================================================
 
 @track_performance
@@ -1729,44 +1727,256 @@ def scan_market(market_data: Dict[str, pd.DataFrame], ref_close: Optional[pd.Ser
     return results
 
 # =============================================================
-# Hybrid Pipeline Güncellemesi
+# Binance Entegre IO Fonksiyonları - GELİŞMİŞ CACHE
 # =============================================================
 
 @track_performance
-def calculate_all_ta_hybrid(df: pd.DataFrame, symbol: str = "default", 
-                          max_workers: Optional[int] = None) -> dict:
+async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
     """
-    Tüm TA'leri hibrit olarak hesaplar:
-      - CPU-bound: ThreadPoolExecutor
-      - I/O-bound: asyncio
-    Dönen sonuç: { indicator_name: value_or_series_or_df }
-    """
-    cpu_results = calculate_cpu_functions(df, max_workers=max_workers)
+    Binance'den gerçek funding rate çeker.
     
-    # I/O-bound fonksiyonları async olarak çalıştır
+    Args:
+        symbol: Sembol adı (default: "BTCUSDT")
+    
+    Returns:
+        Funding rate değeri
+    """
+    symbol = normalize_symbol(symbol)
+    cache_key = f"funding_rate_{symbol}"
+    
+    # Önce cache kontrolü
+    cached = ta_cache.get_ta_result(symbol, "funding_rate", "funding_rate")
+    if cached is not None:
+        ta_metrics.cache_hits += 1
+        return cached
+    
+    ta_metrics.cache_misses += 1
+    ta_metrics.io_requests += 1
+    
     try:
-        io_results = _run_asyncio(calculate_io_functions(symbol))
+        from utils.binance_api import get_global_binance_client
+        client = await get_global_binance_client()
+        
+        if client is None:
+            logger.warning("Binance client not available for funding rate")
+            result = 0.001
+            ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=60)
+            return result
+            
+        try:
+            await client.load_markets()
+            
+            futures_symbol = symbol.replace('/', '').replace(':', '').upper()
+            if futures_symbol not in client.markets:
+                logger.warning(f"Symbol {futures_symbol} not found in futures markets")
+                result = 0.001
+                ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=300)
+                return result
+            
+            market = client.markets[futures_symbol]
+            
+            if market.get('linear', False) or market.get('inverse', False):
+                funding_data = await client.fetch_funding_rate(symbol)
+                result = float(funding_data['fundingRate']) if funding_data else 0.001
+                ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=300)
+                return result
+            else:
+                logger.warning(f"Symbol {futures_symbol} is not a linear or inverse contract")
+                result = 0.001
+                ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=600)
+                return result
+                
+        except Exception as e:
+            ta_metrics.io_errors += 1
+            if "authentication" in str(e).lower():
+                logger.warning(f"Funding rate için yetki yetersiz: {e}")
+            elif "not supported" in str(e).lower():
+                logger.warning(f"Funding rate desteklenmiyor: {e}")
+            else:
+                logger.error(f"Funding rate çekme hatası: {e}")
+            result = 0.001
+            ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=60)
+            return result
+                
     except Exception as e:
-        logger.error(f"I/O functions failed: {e}")
-        io_results = {}
-    
-    return {**cpu_results, **io_results}
+        ta_metrics.io_errors += 1
+        logger.error(f"Funding rate çekilemedi: {e}")
+        result = 0.001
+        ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=30)
+        return result
 
-async def calculate_io_functions(symbol: str = "default") -> dict:
+# =============================================================
+# Trading Pipeline - GELİŞMİŞ HATA YÖNETİMİ
+# =============================================================
+
+@track_performance
+async def optimized_trading_pipeline(symbol: str = "BTCUSDT", 
+                                   interval: str = "1m",
+                                   callback: Optional[Callable] = None,
+                                   max_retries: int = 3):
     """
-    I/O-bound (asenkron) fonksiyonları birlikte yürütür.
+    Geliştirilmiş trading pipeline with enhanced error handling and retry.
+    
+    Args:
+        symbol: İşlem yapılacak sembol (default: "BTCUSDT")
+        interval: Zaman aralığı (default: "1m")
+        callback: Sonuçları işleyecek callback fonksiyonu
+        max_retries: Maksimum yeniden deneme sayısı (default: 3)
     """
-    results: dict = {}
-    names = list(IO_FUNCTIONS.keys())
-    tasks = [IO_FUNCTIONS[n](symbol) for n in names]
-    completed = await asyncio.gather(*tasks, return_exceptions=True)
-    for name, res in zip(names, completed):
-        if isinstance(res, Exception):
-            results[name] = None
-            logger.error(f"[I/O TA ERROR] {name} hesaplanamadı: {res}")
-        else:
-            results[name] = res
-    return results
+    pipeline_logger = logging.getLogger(f"ta_pipeline.{symbol}")
+    
+    try:
+        from utils.binance_api import get_binance_client
+        client = get_binance_client(None, None)
+    except ImportError as e:
+        pipeline_logger.error(f"Binance API modülü yüklenemedi: {e}")
+        return
+    
+    pipeline_interval = getattr(CONFIG.TA, 'TA_PIPELINE_INTERVAL', 60)
+    min_data_points = getattr(CONFIG.TA, 'TA_MIN_DATA_POINTS', 20)
+    cache_ttl = getattr(CONFIG.TA, 'TA_CACHE_TTL', 300)
+    
+    retry_count = 0
+    retry_delay = 5
+    
+    while True:
+        try:
+            # Cache kontrolü
+            cached_result = ta_cache.get_ta_result(symbol, interval, 'full_analysis')
+            
+            if cached_result:
+                pipeline_logger.debug("Using cached TA results")
+                if callback:
+                    try:
+                        await callback(cached_result)
+                    except Exception as e:
+                        pipeline_logger.error(f"Callback error: {e}")
+                await asyncio.sleep(pipeline_interval)
+                continue
+            
+            # Veri çekme
+            klines = await client.get_klines(symbol, interval, limit=100)
+            if not klines or len(klines) < min_data_points:
+                pipeline_logger.warning(f"Insufficient kline data: {len(klines) if klines else 0} points")
+                await asyncio.sleep(30)
+                continue
+            
+            # DataFrame dönüşümü
+            df = klines_to_dataframe(klines)
+            
+            # DataFrame validation
+            required_columns = ['open', 'high', 'low', 'close', 'volume']
+            if not validate_dataframe(df, required_columns):
+                pipeline_logger.error("Invalid DataFrame format")
+                await asyncio.sleep(30)
+                continue
+            
+            if len(df) < min_data_points:
+                pipeline_logger.warning(f"Insufficient data points: {len(df)} < {min_data_points}")
+                await asyncio.sleep(30)
+                continue
+            
+            # TA hesaplama
+            try:
+                ta_results = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: calculate_all_ta_hybrid(df, symbol)
+                )
+            except Exception as e:
+                pipeline_logger.error(f"TA calculation failed: {e}")
+                await asyncio.sleep(30)
+                continue
+            
+            # Sinyal üretme
+            try:
+                signal = generate_signals(df)
+            except Exception as e:
+                pipeline_logger.error(f"Signal generation failed: {e}")
+                signal = {'signal': 0, 'signals': {}, 'total_signal': 0.0, 'alpha_details': {}}
+            
+            # Sonuç paketleme
+            result = {
+                'symbol': symbol,
+                'timestamp': time.time(),
+                'price': float(safe_column_access(df, 'close').iloc[-1]),
+                'signal': signal,
+                'ta_metrics': {k: float(v.iloc[-1]) if hasattr(v, 'iloc') and not v.empty else v 
+                              for k, v in ta_results.items() if v is not None}
+            }
+            
+            # Cache'e kaydetme
+            ta_cache.set_ta_result(symbol, interval, 'full_analysis', result, ttl=cache_ttl)
+            
+            # Callback
+            if callback:
+                try:
+                    await callback(result)
+                except Exception as e:
+                    pipeline_logger.error(f"Callback execution failed: {e}")
+            
+            # Başarılı oldu, retry sıfırla
+            retry_count = 0
+            retry_delay = 5
+            
+            await asyncio.sleep(pipeline_interval)
+            
+        except asyncio.CancelledError:
+            pipeline_logger.info("Trading pipeline cancelled")
+            break
+        except Exception as e:
+            retry_count += 1
+            pipeline_logger.error(f"Trading pipeline error (retry {retry_count}/{max_retries}): {e}")
+            
+            if retry_count >= max_retries:
+                pipeline_logger.error("Max retries exceeded, stopping pipeline")
+                break
+                
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)  # Exponential backoff
+
+# =============================================================
+# Gelişmiş Metrikler ve Monitoring
+# =============================================================
+
+def get_detailed_metrics() -> Dict[str, Any]:
+    """Detaylı sistem metriklerini getir"""
+    cache_stats = ta_cache.get_stats()
+    circuit_status = ta_circuit_breaker.get_status()
+    
+    # Ortalama execution time'ları hesapla
+    avg_times = {}
+    for func_name, times in ta_metrics.execution_times.items():
+        if times:
+            avg_times[func_name] = sum(times) / len(times)
+    
+    return {
+        'calculations': {
+            'total': ta_metrics.total_calculations,
+            'errors': ta_metrics.calculation_errors,
+            'error_rate': ta_metrics.calculation_errors / max(ta_metrics.total_calculations, 1),
+            'cache_hits': ta_metrics.cache_hits,
+            'cache_misses': ta_metrics.cache_misses,
+            'cache_hit_ratio': cache_stats['hit_ratio']
+        },
+        'io': {
+            'requests': ta_metrics.io_requests,
+            'errors': ta_metrics.io_errors,
+            'error_rate': ta_metrics.io_errors / max(ta_metrics.io_requests, 1)
+        },
+        'performance': {
+            'average_times': avg_times,
+            'monitored_functions': list(ta_metrics.execution_times.keys())
+        },
+        'cache': cache_stats,
+        'circuit_breaker': circuit_status,
+        'timestamp': time.time(),
+        'status': 'healthy' if (ta_metrics.calculation_errors / max(ta_metrics.total_calculations, 1)) < 0.1 else 'degraded'
+    }
+
+def reset_metrics():
+    """Metrikleri sıfırla"""
+    global ta_metrics
+    ta_metrics = TAMetrics()
+    logger.info("Metrics reset")
 
 # =============================================================
 # Health Check ve Monitoring
@@ -1799,6 +2009,48 @@ def health_check() -> Dict[str, Any]:
 # =============================================================
 # Unit Test Güncellemeleri
 # =============================================================
+
+def run_unit_tests():
+    """Tüm fonksiyonlar için unit testleri çalıştır"""
+    logger.info("Running unit tests...")
+    
+    # Test verisi
+    test_data = {
+        'open': [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
+        'high': [105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
+        'low': [95, 96, 97, 98, 99, 100, 101, 102, 103, 104],
+        'close': [102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
+        'volume': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+    }
+    df = pd.DataFrame(test_data)
+    
+    # Test fonksiyonları
+    test_functions = [
+        (ema, (df,), {}),
+        (lambda df: macd(df)[0], (df,), {}),  # MACD line only
+        (rsi, (df,), {}),
+        (lambda df: stochastic(df)[0], (df,), {}),  # Stochastic K only
+    ]
+    
+    passed = 0
+    failed = 0
+    
+    for func, args, kwargs in test_functions:
+        try:
+            result = func(*args, **kwargs)
+            # Basit validation
+            if result is not None and not (hasattr(result, 'isna') and result.isna().all()):
+                passed += 1
+                logger.info(f"✓ {func.__name__} test passed")
+            else:
+                failed += 1
+                logger.warning(f"✗ {func.__name__} test failed: Invalid result")
+        except Exception as e:
+            failed += 1
+            logger.error(f"✗ {func.__name__} test failed with error: {e}")
+    
+    logger.info(f"Unit tests completed: {passed} passed, {failed} failed")
+    return passed, failed
 
 def run_alpha_tests():
     """Alpha TA fonksiyonları için unit testler"""
@@ -1888,9 +2140,9 @@ async def main():
     
     logger.info("All Alpha TA tests completed successfully!")
     return total_failed == 0
-    
+
 # =============================================================
-# Ana Fonksiyon - GELİŞMİŞ TEST🟢
+# Ana Fonksiyon - GELİŞMİŞ TEST
 # =============================================================
 
 async def main():
@@ -1921,7 +2173,7 @@ async def main():
     # 2. TA hesaplama test
     logger.info("Testing TA calculations...")
     try:
-        results = await calculate_all_ta_hybrid_async(df, "BTCUSDT")
+        results = calculate_all_ta_hybrid(df, "BTCUSDT")
         logger.info(f"Calculated {len(results)} TA indicators")
         
         # 3. Sinyal üretme test
@@ -1952,6 +2204,3 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
-
-
-
