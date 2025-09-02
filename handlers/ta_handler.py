@@ -6,7 +6,8 @@ from telegram import Update
 from telegram.ext import CommandHandler, CallbackContext
 import logging
 
-from utils.binance_api import get_binance_api
+#get_binance_client() fonksiyonunu get_binance_api() ismiyle kullanabilirsin (diğer kodları değiştirmeden).
+from utils.binance_api import get_binance_client as get_binance_api 
 from utils.config import CONFIG
 from utils.ta_utils import (
     alpha_signal,
