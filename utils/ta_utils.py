@@ -1,4 +1,3 @@
-# utils/ta_utils.py 902-1553
 from __future__ import annotations
 
 import numpy as np
@@ -361,6 +360,7 @@ def unit_test(expected_result=None, tolerance=0.01):
 # =============================================================
 
 # Güncellenmiş validate_dataframe
+
 def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> bool:
     """DataFrame'in geçerli olup olmadığını kontrol et"""
     if df is None or df.empty:
@@ -375,24 +375,20 @@ def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> 
         logger.warning(f"DataFrame missing required columns: {missing_columns}")
         return False
     
-    # NaN kontrolü - DÜZELTİLMİŞ VERSİYON
-    # df[required_columns].isna().all() bir Series döndürür, bu yüzden .any() kullanmalıyız
     try:
         nan_check = df[required_columns].isna().all()
-        if hasattr(nan_check, 'any'):  # Bu bir Series ise
-            if nan_check.any():  # Herhangi bir sütunda tüm değerler NaN mı?
+        if isinstance(nan_check, pd.Series):
+            if nan_check.any():
                 logger.warning("All values are NaN in some columns")
                 return False
-        else:  # Bu bir scalar boolean ise
-            if nan_check:
-                logger.warning("All values are NaN in DataFrame")
-                return False
+        elif bool(nan_check):
+            logger.warning("All values are NaN in DataFrame")
+            return False
     except Exception as e:
         logger.warning(f"NaN check failed: {e}")
         return False
     
     return True
-
 def safe_column_access(df: pd.DataFrame, column: str, default_value: Any = np.nan, 
                       log_warning: bool = True) -> pd.Series:
     """Güvenli sütun erişimi sağlar"""
@@ -2227,7 +2223,24 @@ if __name__ == "__main__":
     success = asyncio.run(main())
     exit(0 if success else 1)
 
-# EOF
 
-
-
+@track_performance
+def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
+    """Exponential Moving Average hesaplar."""
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        period = period or getattr(CONFIG.TA, 'EMA_PERIOD', 20)
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < period or price_series.isna().all():
+            logger.warning(f"EMA: Not enough valid data points ({len(price_series)} < {period} or all NaN)")
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        return ta_circuit_breaker.execute(
+            lambda: price_series.ewm(span=period, adjust=False).mean()
+        )
+    except Exception as e:
+        logger.error(f"EMA hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index if df is not None else [])
