@@ -1133,27 +1133,24 @@ def generate_signals(df: pd.DataFrame) -> dict:
 # Yardımcı Fonksiyonlar
 # =============================================================
 
-def klines_to_dataframe(klines: list) -> pd.DataFrame:
-    """Binance klines'ını DataFrame'e dönüştürür."""
+# CCXT OHLCV formatını işleyecek şekilde güncelle
+def klines_to_dataframe(ohlcv: list) -> pd.DataFrame:
+    """CCXT OHLCV formatını DataFrame'e dönüştürür."""
     try:
-        df = pd.DataFrame(klines, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         # Sayısal kolonları dönüştür
-        numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+	numeric_cols = ['open', 'high', 'low', 'close', 'volume']
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # Timestamp'i datetime'a çevir
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+         # Timestamp'i datetime'a çevir
+	df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         
         return df
     except Exception as e:
-        logger.error(f"Klines to DataFrame dönüşümünde hata: {e}")
+        logger.error(f"OHLCV to DataFrame dönüşümünde hata: {e}")
         return pd.DataFrame()
 
 def get_ta_function(name: str) -> Optional[Callable]:
@@ -1275,6 +1272,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
 
