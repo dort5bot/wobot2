@@ -11,6 +11,11 @@ FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
+# Sistem paketlerini kur (gerekli olabilir)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user oluştur
 RUN addgroup --system --gid 1001 appgroup && \
     adduser --system --uid 1001 appuser
@@ -21,13 +26,17 @@ COPY --chown=appuser:appgroup . .
 
 # PATH'e user Python paketlerini ekle
 ENV PATH="/home/appuser/.local/bin:${PATH}"
+ENV PYTHONPATH="/home/appuser/.local/lib/python3.11/site-packages:${PYTHONPATH}"
 
-# Port bilgisi (3000 portu için)
-EXPOSE 3000
+# Python paketlerinin doğru kopyalandığını kontrol et
+RUN python -c "import nest_asyncio; print('nest_asyncio successfully imported')" || echo "Import failed"
 
-# Health check - 3000 portunda çalıştığını varsayarak
+# Port bilgisi (Render otomatik port kullanır)
+EXPOSE 10000
+
+# Health check - Render için uygun port
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:3000/health || exit 1
+  CMD curl -f http://localhost:10000/ || exit 1
 
 # Non-root user ile çalıştır
 USER appuser
