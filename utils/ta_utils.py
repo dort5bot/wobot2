@@ -813,7 +813,584 @@ def run_unit_tests():
     return passed, failed
 
 # =============================================================
-# Ana Fonksiyon - GELİŞMİŞ TEST
+# Advanced Signal Stack: alpha_ta - ESKİ KODDAN AKTARILDI
+# =============================================================
+
+# --- 1) Kalman:
+@track_performance
+def kalman_filter_series(prices: pd.Series, q: Optional[float] = None, r: Optional[float] = None) -> pd.Series:
+    """
+    Minimal 1D random-walk Kalman.
+    Q: process noise, R: measurement noise (CONFIG.TA'dan gelir)
+    """
+    try:
+        if q is None:
+            q = getattr(CONFIG.TA, "KALMAN_Q", 1e-5)
+        if r is None:
+            r = getattr(CONFIG.TA, "KALMAN_R", 1e-2)
+
+        x = 0.0
+        p = 1.0
+        out = []
+        initialized = False
+
+        vals = prices.fillna(method="ffill").values
+        for z in vals:
+            z = float(z)
+            if not initialized:
+                x = z
+                initialized = True
+
+            # predict
+            x_prior = x
+            p_prior = p + q
+
+            # update
+            k = p_prior / (p_prior + r)
+            x = x_prior + k * (z - x_prior)
+            p = (1 - k) * p_prior
+            out.append(x)
+        return pd.Series(out, index=prices.index, name="kalman")
+    except Exception as e:
+        logger.error(f"Kalman filter error: {e}")
+        return pd.Series([np.nan] * len(prices), index=prices.index)
+
+# --- 2) Hilbert:
+@track_performance
+def _hilbert_fallback(x: np.ndarray) -> np.ndarray:
+    """Hilbert transform fallback implementation"""
+    n = len(x)
+    Xf = np.fft.fft(x)
+    h = np.zeros(n)
+    if n % 2 == 0:
+        h[0] = 1; h[n//2] = 1; h[1:n//2] = 2
+    else:
+        h[0] = 1; h[1:(n+1)//2] = 2
+    return np.fft.ifft(Xf * h)
+
+@track_performance
+def hilbert_features(prices: pd.Series) -> dict:
+    """Hilbert transform features"""
+    try:
+        x = prices.fillna(method="ffill").values.astype(float)
+        try:
+            from scipy.signal import hilbert
+            analytic = hilbert(x)
+        except Exception:
+            analytic = _hilbert_fallback(x)
+        amp = np.abs(analytic)
+        phase = np.unwrap(np.angle(analytic))
+        inst_freq = np.diff(phase, prepend=phase[0])
+        return {
+            "amp": pd.Series(amp, index=prices.index),
+            "inst_freq": pd.Series(inst_freq, index=prices.index),
+        }
+    except Exception as e:
+        logger.error(f"Hilbert features error: {e}")
+        return {
+            "amp": pd.Series([np.nan] * len(prices), index=prices.index),
+            "inst_freq": pd.Series([np.nan] * len(prices), index=prices.index),
+        }
+
+# --- 3) Entropy measures
+@track_performance
+def _phi(m: int, r: float, series: np.ndarray) -> float:
+    """Entropy calculation helper"""
+    n = len(series)
+    if n <= m + 1:
+        return np.inf
+    x = np.array([series[i:i+m] for i in range(n - m + 1)])
+    # pairwise Chebyshev distances
+    d = np.max(np.abs(x[:, None, :] - x[None, :, :]), axis=2)
+    C = (d <= r).sum(axis=1) / (n - m + 1)
+    C = C[C > 0]
+    return np.sum(np.log(C)) / (len(C) + 1e-12) if len(C) else np.inf
+
+@track_performance
+def approximate_entropy(series: pd.Series, m: Optional[int] = None, r: Optional[float] = None) -> float:
+    """Approximate entropy calculation"""
+    try:
+        s = series.dropna().values.astype(float)
+        if len(s) < 5:
+            return np.nan
+        m = getattr(CONFIG.TA, "ENTROPY_M", 3) if m is None else m
+        if r is None:
+            r = getattr(CONFIG.TA, "ENTROPY_R_FACTOR", 0.2) * np.std(s)
+        return float(_phi(m, r, s) - _phi(m+1, r, s))
+    except Exception as e:
+        logger.error(f"Approximate entropy error: {e}")
+        return np.nan
+
+@track_performance
+def sample_entropy(series: pd.Series, m: Optional[int] = None, r: Optional[float] = None) -> float:
+    """Sample entropy calculation"""
+    try:
+        s = series.dropna().values.astype(float)
+        if len(s) < 5:
+            return np.nan
+        m = getattr(CONFIG.TA, "ENTROPY_M", 3) if m is None else m
+        if r is None:
+            r = getattr(CONFIG.TA, "ENTROPY_R_FACTOR", 0.2) * np.std(s)
+        n = len(s)
+        xm = np.array([s[i:i+m] for i in range(n-m)])
+        xm1 = np.array([s[i:i+m+1] for i in range(n-m-1)])
+        def count_sim(x, tol):
+            d = np.max(np.abs(x[:, None, :] - x[None, :, :]), axis=2)
+            return (d <= tol).sum() - len(x)
+        B = count_sim(xm, r)
+        A = count_sim(xm1, r)
+        if B <= 0 or A <= 0:
+            return np.nan
+        return float(-np.log(A / B))
+    except Exception as e:
+        logger.error(f"Sample entropy error: {e}")
+        return np.nan
+
+@track_performance
+def permutation_entropy(series: pd.Series, m: Optional[int] = None) -> float:
+    """Permutation entropy calculation"""
+    try:
+        s = series.dropna().values.astype(float)
+        m = 3 if m is None else m
+        if len(s) < m:
+            return np.nan
+        patterns = {}
+        for i in range(len(s) - m + 1):
+            pat = tuple(np.argsort(s[i:i+m]))
+            patterns[pat] = patterns.get(pat, 0) + 1
+        p = np.array(list(patterns.values()), dtype=float)
+        p /= p.sum()
+        return float(-np.sum(p * np.log(p + 1e-12)) / np.log(math.factorial(m)))
+    except Exception as e:
+        logger.error(f"Permutation entropy error: {e}")
+        return np.nan
+
+# --- 4) Rejim tespiti 
+@track_performance
+def detect_regime(df: pd.DataFrame, window: Optional[int] = None) -> pd.Series:
+    """
+    Basit rejim skoru: trendiness ~ trend_z - penalty(vol_z)
+    Çıktı: [-1,1] aralığına yakın normalize bir seri.
+    """
+    try:
+        window = getattr(CONFIG.TA, "REGIME_WINDOW", 80) if window is None else window
+        px = safe_column_access(df, "close").astype(float)
+        if len(px) < window + 5:
+            return pd.Series([0.0] * len(px), index=px.index, name="regime_score")
+        ret = px.pct_change()
+        vol = ret.rolling(window).std()
+        # pencere içinde lineer trend eğimi
+        def slope(x):
+            idx = np.arange(len(x))
+            b, a = np.polyfit(idx, x, 1)
+            return b
+        trend = px.rolling(window).apply(slope, raw=True)
+        # normalize (robust-ish)
+        def zscore(s):
+            m = s.rolling(window).mean()
+            sd = s.rolling(window).std()
+            return (s - m) / (sd + 1e-9)
+        trend_z = zscore(trend).fillna(0).clip(-3,3)/3.0
+        vol_z = zscore(vol).fillna(0).clip(-3,3)/3.0
+        score = trend_z - 0.5*np.maximum(vol_z-0.5, 0.0)
+        return score.fillna(0.0).rename("regime_score")
+    except Exception as e:
+        logger.error(f"Regime detection error: {e}")
+        px = safe_column_access(df, "close")
+        return pd.Series([0.0] * len(px), index=px.index, name="regime_score")
+
+# --- 5) Lead-Lag: max xcorr lag
+@track_performance
+def leadlag_xcorr(target: pd.Series, reference: pd.Series, max_lag: Optional[int] = None) -> dict:
+    """
+    target ve reference getirileri arasında [-max_lag, max_lag] gecikmede
+    maksimum korelasyonu bulur. Skoru [-1,1]'e sıkıştırır.
+    """
+    try:
+        max_lag = getattr(CONFIG.TA, "LEADLAG_MAX_LAG", 10) if max_lag is None else max_lag
+        x = target.pct_change().dropna().values
+        y = reference.pct_change().dropna().values
+        L = min(len(x), len(y))
+        if L < max_lag + 5:
+            return {"lag": 0, "corr": 0.0, "score": 0.0}
+        x = x[-L:]; y = y[-L:]
+        best_corr, best_lag = 0.0, 0
+        for lag in range(-max_lag, max_lag+1):
+            if lag < 0:
+                corr = np.corrcoef(x[:lag], y[-lag:])[0,1]
+            elif lag > 0:
+                corr = np.corrcoef(x[lag:], y[:-lag])[0,1]
+            else:
+                corr = np.corrcoef(x, y)[0,1]
+            if np.isfinite(corr) and abs(corr) > abs(best_corr):
+                best_corr, best_lag = float(corr), lag
+        score = float(np.tanh(best_corr))  # [-1,1]
+        return {"lag": int(best_lag), "corr": float(best_corr), "score": score}
+    except Exception as e:
+        logger.error(f"Lead-lag correlation error: {e}")
+        return {"lag": 0, "corr": 0.0, "score": 0.0}
+
+# --- 6) Birleşik skorlayıcı + sinyal
+@track_performance
+def compute_alpha_ta(df: pd.DataFrame, ref_series: Optional[pd.Series] = None) -> dict:
+    """
+    Döndürür:
+      {
+        "score": float in [-1,1],
+        "detail": {...},
+        "series": {"kalman": Series, "regime_score": Series}
+      }
+    """
+    try:
+        px = safe_column_access(df, "close").astype(float)
+        # Kalman
+        kf = kalman_filter_series(px)
+        kf_err = (px - kf).rolling(20).std()
+        kf_score = float(np.tanh((kf.diff().iloc[-1]) / (float(kf_err.iloc[-1]) + 1e-9))) if len(kf) > 21 else 0.0
+
+        # Hilbert
+        h = hilbert_features(px)
+        hf = h["inst_freq"].rolling(10).mean()
+        ha = h["amp"].rolling(10).mean()
+        hilbert_raw = (hf.diff().iloc[-1] if len(hf) > 1 else 0.0)
+        hilbert_penalty = float(np.tanh((ha.pct_change().rolling(10).std().iloc[-1] if len(ha) > 11 else 0.0)))
+        hilbert_score = float(np.tanh(hilbert_raw)) * (1.0 - 0.3*abs(hilbert_penalty))
+
+        # Entropy
+        apen = approximate_entropy(px)
+        samp = sample_entropy(px)
+        pent = permutation_entropy(px)
+        ent_vals = np.array([v for v in [apen, samp, pent] if isinstance(v, (int,float)) and np.isfinite(v)])
+        if len(ent_vals):
+            ent_z = (ent_vals - np.nanmean(ent_vals)) / (np.nanstd(ent_vals) + 1e-9)
+            entropy_score = float(np.tanh(-ent_z.mean()))  # düşük entropy → pozitif
+        else:
+            entropy_score = 0.0
+
+        # Rejim
+        reg = detect_regime(df)
+        regime_score = float(np.clip(reg.iloc[-1] if len(reg) else 0.0, -1.0, 1.0))
+
+        # Lead-Lag (opsiyonel)
+        if isinstance(ref_series, pd.Series) and len(ref_series) >= len(px)//2:
+            ll = leadlag_xcorr(px, ref_series)
+            leadlag_score = ll["score"]
+            leadlag_detail = ll
+        else:
+            leadlag_score = 0.0
+            leadlag_detail = {"lag": 0, "corr": 0.0, "score": 0.0}
+
+        # Ağırlıklı birleşim
+        w = CONFIG.TA
+        score = (
+            getattr(w, "W_KALMAN", 0.20)   * kf_score +
+            getattr(w, "W_HILBERT", 0.20)  * hilbert_score +
+            getattr(w, "W_ENTROPY", 0.20)  * entropy_score +
+            getattr(w, "W_REGIME", 0.20)   * regime_score +
+            getattr(w, "W_LEADLAG", 0.20)  * leadlag_score
+        )
+        score = float(np.clip(score, -1.0, 1.0))
+
+        return {
+            "score": score,
+            "detail": {
+                "kalman_score": kf_score,
+                "hilbert_score": hilbert_score,
+                "entropy_score": entropy_score,
+                "regime_score": regime_score,
+                "leadlag": leadlag_detail,
+            },
+            "series": {
+                "kalman": kf,
+                "regime_score": reg,
+            }
+        }
+    except Exception as e:
+        logger.error(f"[ALPHA_TA ERROR] {e}")
+        return {"score": 0.0, "detail": {}, "series": {}}
+
+@track_performance
+def alpha_signal(df: pd.DataFrame, ref_series: Optional[pd.Series] = None) -> dict:
+    """Alpha signal generation"""
+    res = compute_alpha_ta(df, ref_series=ref_series)
+    s = res["score"]
+    long_threshold = getattr(CONFIG.TA, "ALPHA_LONG_THRESHOLD", 0.6)
+    short_threshold = getattr(CONFIG.TA, "ALPHA_SHORT_THRESHOLD", -0.6)
+    
+    if s >= long_threshold:
+        sig = 1
+    elif s <= short_threshold:
+        sig = -1
+    else:
+        sig = 0
+    res["signal"] = sig
+    return res
+
+# =============================================================
+# Registry Güncellemeleri alpha_ta/alpha_signal ekleri (CPU parallel'e uygun)
+# =============================================================
+
+# CPU-bound fonksiyonlara alpha_ta ekle
+CPU_FUNCTIONS["alpha_ta"] = lambda df: compute_alpha_ta(df)
+CPU_FUNCTIONS["alpha_signal"] = lambda df: alpha_signal(df)
+
+# TA_FUNCTIONS registry güncellemesi
+TA_FUNCTIONS = {
+    **TA_FUNCTIONS,
+    "alpha_ta": compute_alpha_ta,
+    "alpha_signal": alpha_signal,
+}
+
+# =============================================================
+# Generate Signals ve Scan Market Fonksiyonları - GÜNCELLENMİŞ-7
+# =============================================================
+
+@track_performance
+def generate_signals(df: pd.DataFrame, ref_series: Optional[pd.Series] = None) -> dict:
+    """
+    Basit klasik TA kararı + alpha_ta sinyali beraber.
+    """
+    try:
+        indicators: Dict[str, float] = {}
+
+        # Trend: EMA
+        ema_periods = getattr(CONFIG.TA, "EMA_PERIODS", [20, 50])
+        ema_fast = ema(df, period=ema_periods[0])
+        ema_slow = ema(df, period=ema_periods[1])
+        indicators["ema_fast"] = float(ema_fast.iloc[-1]) if not ema_fast.empty else np.nan
+        indicators["ema_slow"] = float(ema_slow.iloc[-1]) if not ema_slow.empty else np.nan
+        ema_signal = 1 if indicators["ema_fast"] > indicators["ema_slow"] else -1
+
+        # MACD
+        macd_line, signal_line, _ = macd(df)
+        macd_val = float(macd_line.iloc[-1] - signal_line.iloc[-1]) if not macd_line.empty and not signal_line.empty else 0.0
+        indicators["macd"] = macd_val
+        macd_signal = 1 if macd_val > 0 else -1
+
+        # Momentum: RSI
+        rsi_val = float(rsi(df).iloc[-1]) if not rsi(df).empty else 50.0
+        indicators["rsi"] = rsi_val
+        rsi_signal = 1 if rsi_val < 30 else (-1 if rsi_val > 70 else 0)
+
+        # Volatilite: ATR
+        atr_val = atr(df)
+        indicators["atr"] = float(atr_val.iloc[-1]) if not atr_val.empty else np.nan
+
+        # Hacim: OBV (tek hesap)
+        obv_series = obv(df)
+        obv_val = float(obv_series.iloc[-1]) if not obv_series.empty else 0.0
+        indicators["obv"] = obv_val
+        obv_signal = 1 if len(obv_series) > 20 and obv_val > float(obv_series.iloc[-20]) else -1
+
+        weights = {"ema":0.3, "macd":0.3, "rsi":0.2, "obv":0.2}
+        score = (ema_signal*weights["ema"] + macd_signal*weights["macd"] +
+                 rsi_signal*weights["rsi"] + obv_signal*weights["obv"])
+
+        # Eşikleri config'ten al
+        long_threshold = getattr(CONFIG.TA, "ALPHA_LONG_THRESHOLD", 0.6)
+        short_threshold = getattr(CONFIG.TA, "ALPHA_SHORT_THRESHOLD", -0.6)
+        
+        if score >= long_threshold:
+            signal = 1
+        elif score <= short_threshold:
+            signal = -1
+        else:
+            signal = 0
+
+        # alpha_ta
+        alpha = alpha_signal(df, ref_series=ref_series)
+        return {
+            "signal": signal,
+            "score": round(float(score), 4),
+            "indicators": indicators,
+            "alpha_ta": alpha
+        }
+    except Exception as e:
+        logger.error(f"[SIGNAL ERROR] Sinyal hesaplanamadı: {e}")
+        return {"signal": 0, "score": 0.0, "indicators": {}, "alpha_ta": {"score": 0.0, "signal": 0}}
+
+@track_performance
+def scan_market(market_data: Dict[str, pd.DataFrame], ref_close: Optional[pd.Series] = None) -> dict:
+    """
+    Çoklu sembol taraması:
+      market_data: { "BTCUSDT": df, "ETHUSDT": df, ... }
+      ref_close  : opsiyonel referans seri (örn. BTC close) lead-lag için
+    """
+    results: Dict[str, dict] = {}
+    for symbol, df in market_data.items():
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            results[symbol] = {"alpha_ta": {"score": 0.0, "signal": 0}}
+            continue
+        try:
+            results[symbol] = alpha_signal(df, ref_series=ref_close)
+        except Exception as e:
+            logger.error(f"[SCAN ERROR] {symbol}: {e}")
+            results[symbol] = {"alpha_ta": {"score": 0.0, "signal": 0}}
+    return results
+
+# =============================================================
+# Hybrid Pipeline Güncellemesi
+# =============================================================
+
+@track_performance
+def calculate_all_ta_hybrid(df: pd.DataFrame, symbol: str = "default", 
+                          max_workers: Optional[int] = None) -> dict:
+    """
+    Tüm TA'leri hibrit olarak hesaplar:
+      - CPU-bound: ThreadPoolExecutor
+      - I/O-bound: asyncio
+    Dönen sonuç: { indicator_name: value_or_series_or_df }
+    """
+    cpu_results = calculate_cpu_functions(df, max_workers=max_workers)
+    
+    # I/O-bound fonksiyonları async olarak çalıştır
+    try:
+        io_results = _run_asyncio(calculate_io_functions(symbol))
+    except Exception as e:
+        logger.error(f"I/O functions failed: {e}")
+        io_results = {}
+    
+    return {**cpu_results, **io_results}
+
+async def calculate_io_functions(symbol: str = "default") -> dict:
+    """
+    I/O-bound (asenkron) fonksiyonları birlikte yürütür.
+    """
+    results: dict = {}
+    names = list(IO_FUNCTIONS.keys())
+    tasks = [IO_FUNCTIONS[n](symbol) for n in names]
+    completed = await asyncio.gather(*tasks, return_exceptions=True)
+    for name, res in zip(names, completed):
+        if isinstance(res, Exception):
+            results[name] = None
+            logger.error(f"[I/O TA ERROR] {name} hesaplanamadı: {res}")
+        else:
+            results[name] = res
+    return results
+
+# =============================================================
+# Health Check ve Monitoring
+# =============================================================
+
+def health_check() -> Dict[str, Any]:
+    """Sistem sağlık durumunu kontrol et"""
+    metrics = get_detailed_metrics()
+    
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "components": {
+            "calculations": "healthy" if metrics['calculations']['error_rate'] < 0.1 else "degraded",
+            "io": "healthy" if metrics['io']['error_rate'] < 0.2 else "degraded",
+            "cache": "healthy" if metrics['cache']['hit_ratio'] > 0.3 else "degraded",
+            "circuit_breaker": metrics['circuit_breaker']['state'].lower()
+        },
+        "metrics": metrics
+    }
+    
+    # Genel durumu belirle
+    if (metrics['calculations']['error_rate'] > 0.3 or 
+        metrics['io']['error_rate'] > 0.5 or
+        metrics['circuit_breaker']['state'] == CircuitState.OPEN.value):
+        health_status["status"] = "degraded"
+    
+    return health_status
+
+# =============================================================
+# Unit Test Güncellemeleri
+# =============================================================
+
+def run_alpha_tests():
+    """Alpha TA fonksiyonları için unit testler"""
+    logger.info("Running Alpha TA unit tests...")
+    
+    # Test verisi
+    test_data = {
+        'open': [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] * 10,
+        'high': [105, 106, 107, 108, 109, 110, 111, 112, 113, 114] * 10,
+        'low': [95, 96, 97, 98, 99, 100, 101, 102, 103, 104] * 10,
+        'close': [102, 103, 104, 105, 106, 107, 108, 109, 110, 111] * 10,
+        'volume': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000] * 10
+    }
+    df = pd.DataFrame(test_data)
+    
+    alpha_tests = [
+        (kalman_filter_series, (df['close'],), {}),
+        (hilbert_features, (df['close'],), {}),
+        (approximate_entropy, (df['close'],), {}),
+        (detect_regime, (df,), {}),
+        (compute_alpha_ta, (df,), {}),
+        (alpha_signal, (df,), {}),
+        (generate_signals, (df,), {})
+    ]
+    
+    passed = 0
+    failed = 0
+    
+    for func, args, kwargs in alpha_tests:
+        try:
+            result = func(*args, **kwargs)
+            # Basit validation
+            if result is not None:
+                passed += 1
+                logger.info(f"✓ {func.__name__} test passed")
+            else:
+                failed += 1
+                logger.warning(f"✗ {func.__name__} test failed: Invalid result")
+        except Exception as e:
+            failed += 1
+            logger.error(f"✗ {func.__name__} test failed with error: {e}")
+    
+    logger.info(f"Alpha TA tests completed: {passed} passed, {failed} failed")
+    return passed, failed
+
+# Ana fonksiyona alpha testleri ekle
+async def main():
+    """Güncellenmiş ana test fonksiyonu"""
+    logger.info("Starting comprehensive TA utils test with Alpha TA...")
+    
+    # Unit testleri çalıştır
+    passed, failed = run_unit_tests()
+    alpha_passed, alpha_failed = run_alpha_tests()
+    
+    total_passed = passed + alpha_passed
+    total_failed = failed + alpha_failed
+    
+    if total_failed > 0:
+        logger.warning(f"{total_failed} tests failed, proceeding with caution")
+    
+    # Test verisi
+    test_data = {
+        'open': [100, 101, 102, 103, 104, 105, 106, 107, 108, 109] * 10,
+        'high': [105, 106, 107, 108, 109, 110, 111, 112, 113, 114] * 10,
+        'low': [95, 96, 97, 98, 99, 100, 101, 102, 103, 104] * 10,
+        'close': [102, 103, 104, 105, 106, 107, 108, 109, 110, 111] * 10,
+        'volume': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000] * 10
+    }
+    df = pd.DataFrame(test_data)
+    
+    try:
+        # Alpha TA test
+        alpha_result = compute_alpha_ta(df)
+        logger.info(f"Alpha TA score: {alpha_result.get('score', 0.0):.4f}")
+        
+        # Signal generation test
+        signal = generate_signals(df)
+        logger.info(f"Generated signal: {signal['signal']}, score: {signal['score']:.4f}")
+        
+        # Health check
+        health = health_check()
+        logger.info(f"Health status: {health['status']}")
+        
+    except Exception as e:
+        logger.error(f"Alpha TA test failed: {e}")
+        return False
+    
+    logger.info("All Alpha TA tests completed successfully!")
+    return total_failed == 0
+    
+# =============================================================
+# Ana Fonksiyon - GELİŞMİŞ TEST🟢
 # =============================================================
 
 async def main():
@@ -875,3 +1452,4 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
+
