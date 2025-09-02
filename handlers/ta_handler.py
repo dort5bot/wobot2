@@ -188,5 +188,147 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
 
     asyncio.ensure_future(_run())
 
-# Diğer handler fonksiyonları aynı şekilde güncellenmeli...
-# (/tt, /tc, /tr, /ts, /tm handler'ları)
+# ------------------------------------------------------------
+# /tt Trend filtreleme
+# ------------------------------------------------------------
+def tt_handler(update: Update, context: CallbackContext) -> None:
+    chat_id = update.effective_chat.id
+
+    async def _run():
+        try:
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if not btc_df.empty else None
+            
+            results = scan_market({}, ref_close=ref_close)
+            trend_coins = [
+                (sym, res) for sym, res in results.items()
+                if res.get("detail", {}).get("regime_score", 0) > 0.5
+            ]
+            text = "📈 TREND Coin'ler\n"
+            for sym, res in trend_coins[:10]:
+                score = res["alpha_ta"].get("score", 0.0)
+                sig = res["alpha_ta"].get("signal", 0)
+                text += f"{sym}: α={round(score,2)} [{sig}] | Rejim=trend\n"
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
+
+    asyncio.ensure_future(_run())
+
+# ------------------------------------------------------------
+# /tc Crash filtreleme
+# ------------------------------------------------------------
+def tc_handler(update: Update, context: CallbackContext) -> None:
+    chat_id = update.effective_chat.id
+
+    async def _run():
+        try:
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if not btc_df.empty else None
+            
+            results = scan_market({}, ref_close=ref_close)
+            crash_coins = [
+                (sym, res) for sym, res in results.items()
+                if res.get("detail", {}).get("regime_score", 0) < -0.5
+            ]
+            text = "📉 CRASH Coin'ler\n"
+            for sym, res in crash_coins[:10]:
+                score = res["alpha_ta"].get("score", 0.0)
+                sig = res["alpha_ta"].get("signal", 0)
+                text += f"{sym}: α={round(score,2)} [{sig}] | Rejim=crash\n"
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
+
+    asyncio.ensure_future(_run())
+
+# ------------------------------------------------------------
+# /tr Range filtreleme
+# ------------------------------------------------------------
+def tr_handler(update: Update, context: CallbackContext) -> None:
+    chat_id = update.effective_chat.id
+
+    async def _run():
+        try:
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if not btc_df.empty else None
+            
+            results = scan_market({}, ref_close=ref_close)
+            range_coins = [
+                (sym, res) for sym, res in results.items()
+                if -0.5 <= res.get("detail", {}).get("regime_score", 0) <= 0.5
+            ]
+            text = "🔄 RANGE Coin'ler\n"
+            for sym, res in range_coins[:10]:
+                score = res["alpha_ta"].get("score", 0.0)
+                sig = res["alpha_ta"].get("signal", 0)
+                text += f"{sym}: α={round(score,2)} [{sig}] | Rejim=range\n"
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
+
+    asyncio.ensure_future(_run())
+
+# ------------------------------------------------------------
+# /ts Sistem durumu
+# ------------------------------------------------------------
+def ts_handler(update: Update, context: CallbackContext) -> None:
+    chat_id = update.effective_chat.id
+    try:
+        metrics = get_detailed_metrics()
+        health = health_check()
+        text = (
+            f"🔄 TA Sistemi Durumu\n"
+            f"📊 Durum: {health['status']}\n"
+            f"💾 Cache: {metrics['cache']['hits']}/{metrics['cache']['misses']} isabet\n"
+            f"📈 Hesaplamalar: {metrics['calculations']['total']}\n"
+            f"❌ Hatalar: {metrics['calculations']['errors']}\n"
+        )
+        context.bot.send_message(chat_id=chat_id, text=text)
+    except Exception as e:
+        context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
+
+# ------------------------------------------------------------
+# /tm Market raporu
+# ------------------------------------------------------------
+def tm_handler(update: Update, context: CallbackContext) -> None:
+    chat_id = update.effective_chat.id
+
+    async def _run():
+        try:
+            # Referans seri için BTC verisi al
+            btc_df = await fetch_ohlcv("BTCUSDT", hours=4, interval="1h")
+            ref_close = btc_df["close"] if not btc_df.empty else None
+            
+            results = scan_market({}, ref_close=ref_close)
+            total = len(results)
+            trend = sum(1 for r in results.values() if r.get("detail", {}).get("regime_score", 0) > 0.5)
+            crash = sum(1 for r in results.values() if r.get("detail", {}).get("regime_score", 0) < -0.5)
+            range_c = total - trend - crash
+
+            text = (
+                f"📊 MARKET TARAMA RAPORU\n"
+                f"🔢 TOPLAM: {total} coin\n"
+                f"📈 TREND: {trend} coin\n"
+                f"🔄 RANGE: {range_c} coin\n"
+                f"📉 CRASH: {crash} coin\n"
+            )
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Hata: {e}")
+
+    asyncio.ensure_future(_run())
+
+# ------------------------------------------------------------
+# Plugin loader
+# ------------------------------------------------------------
+def register(app):
+    app.add_handler(CommandHandler("t", ta_handler))
+    app.add_handler(CommandHandler("tt", tt_handler))
+    app.add_handler(CommandHandler("tc", tc_handler))
+    app.add_handler(CommandHandler("tr", tr_handler))
+    app.add_handler(CommandHandler("ts", ts_handler))
+    app.add_handler(CommandHandler("tm", tm_handler))
