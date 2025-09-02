@@ -195,14 +195,26 @@ ta_metrics = TAMetrics()
 # Trend İndikatörleri
 # =============================================================
 
+def safe_column_access(df: pd.DataFrame, column: str, default_value: Any = np.nan) -> pd.Series:
+    """Güvenli sütun erişimi sağlar, sütun yoksa default değer döndürür."""
+    if column in df.columns:
+        return df[column]
+    else:
+        logger.warning(f"{column} sütunu DataFrame'de bulunamadı, default değer kullanılıyor")
+        return pd.Series([default_value] * len(df), index=df.index, name=column)
+
 def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
     """Exponential Moving Average (EMA) hesaplar."""
     try:
         period = period or getattr(CONFIG.TA, 'EMA_PERIOD', 20)
-        return df[column].ewm(span=period, adjust=False).mean()
+        price_series = safe_column_access(df, column)
+        return price_series.ewm(span=period, adjust=False).mean()
     except Exception as e:
         logger.error(f"EMA hesaplanırken hata: {e}")
         return pd.Series([np.nan] * len(df), index=df.index)
+
+# Diğer tüm TA fonksiyonlarında safe_column_access kullanın:
+# Örnek: rsi, macd, adx, bollinger_bands, vs.
 
 def macd(df: pd.DataFrame, fast: Optional[int] = None, slow: Optional[int] = None, 
          signal: Optional[int] = None, column: str = "close") -> Tuple[pd.Series, pd.Series, pd.Series]:
@@ -600,17 +612,15 @@ async def optimized_trading_pipeline(symbol: str = "BTCUSDT",
                                    interval: str = "1m",
                                    callback: Optional[Callable] = None):
     """
-    Geliştirilmiş trading pipeline with caching and error handling
+    Geliştirilmiş trading pipeline with enhanced error handling
     """
     logger = logging.getLogger("ta_pipeline")
     
     try:
-        # ❌ Eski: from utils.binance_api import get_binance_api
-        # ✅ Yeni:
         from utils.binance_api import get_binance_client
-        client = get_binance_client(None, None)  # Global instance'ı kullan
-    except ImportError:
-        logger.error("Binance API modülü yüklenemedi")
+        client = get_binance_client(None, None)
+    except ImportError as e:
+        logger.error(f"Binance API modülü yüklenemedi: {e}")
         return
     
     pipeline_interval = getattr(CONFIG.TA, 'TA_PIPELINE_INTERVAL', 60)
@@ -631,28 +641,35 @@ async def optimized_trading_pipeline(symbol: str = "BTCUSDT",
             
             # 2. Cache yoksa, veriyi çek
             klines = await client.get_klines(symbol, interval, limit=100)
-            if not klines:
-                logger.warning(f"{symbol} için kline verisi alınamadı")
+            if not klines or len(klines) < min_data_points:
+                logger.warning(f"{symbol} için yeterli kline verisi alınamadı: {len(klines) if klines else 0} points")
                 await asyncio.sleep(30)
                 continue
             
+            # 3. DataFrame'e dönüştür
             df = klines_to_dataframe(klines)
             
-            # 3. ŞİMDİ data kontrolü yap (df artık tanımlı)
+            # 4. DataFrame doğrulama
+            required_columns = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_columns):
+                logger.error(f"DataFrame'de gerekli kolonlar eksik: {df.columns.tolist()}")
+                await asyncio.sleep(30)
+                continue
+            
             if len(df) < min_data_points:
                 logger.warning("Insufficient data for %s: %d points", symbol, len(df))
                 await asyncio.sleep(30)
                 continue
             
-            # 4. TA hesapla (threaded)
+            # 5. TA hesapla (threaded)
             ta_results = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: calculate_all_ta_hybrid(df, symbol)
             )
             
-            # 5. Sinyal üret
+            # 6. Sinyal üret
             signal = generate_signals(df)
             
-            # 6. Sonuçları paketle
+            # 7. Sonuçları paketle
             result = {
                 'symbol': symbol,
                 'timestamp': time.time(),
@@ -662,21 +679,21 @@ async def optimized_trading_pipeline(symbol: str = "BTCUSDT",
                               for k, v in ta_results.items() if v is not None}
             }
             
-            # 7. Cache'e kaydet
+            # 8. Cache'e kaydet
             ta_cache.set_ta_result(symbol, interval, 'full_analysis', result, ttl=cache_ttl)
             
-            # 8. Callback ile gönder
-            if callback and signal['signal'] != 0:
+            # 9. Callback ile gönder
+            if callback:
                 await callback(result)
             
-            # 9. Interval kadar bekle
+            # 10. Interval kadar bekle
             await asyncio.sleep(pipeline_interval)
             
         except asyncio.CancelledError:
             logger.info(f"Trading pipeline for {symbol} cancelled")
             break
         except Exception as e:
-            logger.error("Trading pipeline error for %s: %s", symbol, e)
+            logger.error("Trading pipeline error for %s: %s", symbol, e, exc_info=True)
             await asyncio.sleep(30)
 
 # Genel amaçlı string-çağrı registry
@@ -1137,6 +1154,7 @@ def generate_signals(df: pd.DataFrame) -> dict:
 def klines_to_dataframe(ohlcv: list) -> pd.DataFrame:
     """CCXT OHLCV formatını DataFrame'e dönüştürür."""
     try:
+        # CCXT formatı: [timestamp, open, high, low, close, volume]
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         # Sayısal kolonları dönüştür
@@ -1148,10 +1166,12 @@ def klines_to_dataframe(ohlcv: list) -> pd.DataFrame:
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         
-        return df
+        return df[['open', 'high', 'low', 'close', 'volume']]
+        
     except Exception as e:
         logger.error(f"OHLCV to DataFrame dönüşümünde hata: {e}")
-        return pd.DataFrame()
+        # Fallback: boş DataFrame döndür ama doğru kolonlarla
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
 
 
 def get_ta_function(name: str) -> Optional[Callable]:
@@ -1273,6 +1293,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
 
