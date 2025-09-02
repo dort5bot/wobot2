@@ -473,7 +473,12 @@ def breakout(df: pd.DataFrame, period: int = 20) -> pd.Series:
 # =============================================================
 
 # ta_utils.py
-
+# Fonksiyonun başında cache kontrolü
+cache_key = f"funding_rate_{symbol}"
+cached = ta_cache.get_ta_result(symbol, "funding_rate", "funding_rate")
+if cached is not None:
+    return cached
+    
 async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
     """Binance'den gerçek funding rate çeker - CCXT version"""
     try:
@@ -516,6 +521,9 @@ async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
     except Exception as e:
         logger.error(f"Funding rate çekilemedi: {e}")
         return 0.001
+
+# Fonksiyon sonunda cache'e kaydetme
+ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=300)
 
 async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
     """Gerçek zamanlı order book imbalance hesaplar - CCXT version"""
@@ -1267,6 +1275,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
 
