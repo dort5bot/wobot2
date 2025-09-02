@@ -51,7 +51,7 @@ except ImportError:
 
 
 # --- Log dosyası ayarları ---
-LOG_DIR = os.getenv("LOG_DIR", "wobot1/logs")
+LOG_DIR = os.getenv("LOG_DIR", "logs")  # "wobot1/logs" yerine "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "bot.log")
 
@@ -257,5 +257,6 @@ if __name__ == "__main__":
     asyncio.run(test())
 
 # EOF
+
 
 
