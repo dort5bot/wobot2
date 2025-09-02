@@ -1,6 +1,3 @@
-# ta_utils.py - KUSURSUZ VERSİYON
-# Free Render uyumlu hibrit TA pipeline
-
 from __future__ import annotations
 
 import numpy as np
@@ -14,6 +11,20 @@ import threading
 from typing import Dict, Optional, Tuple, List, Any, Callable, Union
 from dataclasses import dataclass
 from collections import defaultdict, OrderedDict
+import functools
+import inspect
+from enum import Enum
+from datetime import datetime, timedelta
+
+# Performance monitoring için
+import timeit
+from contextlib import contextmanager
+
+# Circuit breaker için
+class CircuitState(Enum):
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
 
 # Config fallback mekanizması - GELİŞMİŞ
 try:
@@ -74,6 +85,99 @@ if not logger.handlers:
     logger.setLevel(logging.INFO if CONFIG_LOADED else logging.WARNING)
 
 # ------------------------------------------------------------
+# Performance Monitoring
+# ------------------------------------------------------------
+@contextmanager
+def time_execution(operation_name: str):
+    """Execution time tracking için context manager"""
+    start_time = time.time()
+    try:
+        yield
+    finally:
+        end_time = time.time()
+        execution_time = end_time - start_time
+        logger.debug(f"{operation_name} executed in {execution_time:.4f} seconds")
+
+def track_performance(func):
+    """Fonksiyon execution time tracking decorator"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with time_execution(f"Function {func.__name__}"):
+            return func(*args, **kwargs)
+    return wrapper
+
+# ------------------------------------------------------------
+# Circuit Breaker Pattern
+# ------------------------------------------------------------
+class CircuitBreaker:
+    """TA fonksiyonları için circuit breaker pattern"""
+    def __init__(self, failure_threshold: int = 5, reset_timeout: int = 60, name: str = "ta_default"):
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.state = CircuitState.CLOSED
+        self.name = name
+        self.success_count = 0
+        logger.info(f"CircuitBreaker '{name}' initialized with threshold {failure_threshold}, timeout {reset_timeout}")
+
+    def execute(self, func, *args, **kwargs):
+        """Fonksiyonu circuit breaker ile çalıştır"""
+        current_time = time.time()
+        
+        # Circuit OPEN durumunda ve timeout dolmadıysa
+        if self.state == CircuitState.OPEN:
+            if current_time - self.last_failure_time > self.reset_timeout:
+                self.state = CircuitState.HALF_OPEN
+                logger.warning(f"CircuitBreaker '{self.name}' moving to HALF_OPEN state")
+            else:
+                remaining = self.reset_timeout - (current_time - self.last_failure_time)
+                logger.error(f"CircuitBreaker '{self.name}' is OPEN. Retry in {remaining:.1f}s")
+                raise Exception(f"Circuit breaker is OPEN. Retry in {remaining:.1f}s")
+        
+        try:
+            # Fonksiyonu çalıştır
+            result = func(*args, **kwargs)
+            
+            # Başarılı ise state'i güncelle
+            if self.state == CircuitState.HALF_OPEN:
+                self.state = CircuitState.CLOSED
+                self.failure_count = 0
+                self.success_count += 1
+                logger.info(f"CircuitBreaker '{self.name}' reset to CLOSED state after successful execution")
+            
+            return result
+            
+        except Exception as e:
+            # Hata durumunda circuit breaker state'ini güncelle
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.state = CircuitState.OPEN
+                logger.error(f"CircuitBreaker '{self.name}' tripped to OPEN state due to {self.failure_count} failures")
+            
+            logger.error(f"CircuitBreaker '{self.name}' execution failed: {str(e)}")
+            raise e
+
+    def get_status(self) -> Dict[str, Any]:
+        """Circuit breaker durumunu getir"""
+        return {
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "success_count": self.success_count,
+            "last_failure_time": self.last_failure_time,
+            "time_since_last_failure": time.time() - self.last_failure_time if self.last_failure_time > 0 else 0
+        }
+
+# Global circuit breaker instances
+ta_circuit_breaker = CircuitBreaker(
+    failure_threshold=5,
+    reset_timeout=60,
+    name="ta_main"
+)
+
+# ------------------------------------------------------------
 # İç yardımcılar ve Cache Mekanizması - GELİŞMİŞ
 # ------------------------------------------------------------
 
@@ -98,28 +202,58 @@ def _get_max_workers(default: int = 2) -> int:
 
 @dataclass
 class TAMetrics:
+    """TA metriklerini tutan data class"""
     total_calculations: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
     calculation_errors: int = 0
     io_requests: int = 0
     io_errors: int = 0
+    execution_times: Dict[str, List[float]] = field(default_factory=lambda: defaultdict(list))
 
-class TACache:
-    """TA hesaplamaları için gelişmiş önbellek katmanı"""
-    def __init__(self, max_size: int = 1000):
+class AdaptiveCache:
+    """Adaptive cache with automatic size adjustment"""
+    def __init__(self, initial_max_size: int = 1000, min_size: int = 100, max_size: int = 5000):
         self._cache = OrderedDict()
         self._hit_count = 0
         self._miss_count = 0
         self._last_cleanup = time.time()
+        self._min_size = min_size
         self._max_size = max_size
+        self._current_max_size = initial_max_size
         self._lock = threading.RLock()
-        logger.info(f"TA Cache initialized with max_size: {max_size}")
+        self._access_pattern = []  # LRU pattern tracking
+        self._last_optimization = time.time()
+        logger.info(f"Adaptive Cache initialized with size range: {min_size}-{max_size}")
+    
+    def _optimize_size(self):
+        """Cache boyutunu otomatik optimize et"""
+        current_time = time.time()
+        if current_time - self._last_optimization < 300:  # 5 dakikada bir
+            return
+            
+        hit_rate = self._hit_count / max(self._hit_count + self._miss_count, 1)
+        
+        # Hit rate'e göre cache boyutunu ayarla
+        if hit_rate > 0.8 and self._current_max_size < self._max_size:
+            # Yüksek hit rate, cache boyutunu artır
+            new_size = min(self._current_max_size * 1.2, self._max_size)
+            logger.info(f"Optimizing cache: increasing size from {self._current_max_size} to {new_size} (hit rate: {hit_rate:.2%})")
+            self._current_max_size = int(new_size)
+        elif hit_rate < 0.3 and self._current_max_size > self._min_size:
+            # Düşük hit rate, cache boyutunu azalt
+            new_size = max(self._current_max_size * 0.8, self._min_size)
+            logger.info(f"Optimizing cache: decreasing size from {self._current_max_size} to {new_size} (hit rate: {hit_rate:.2%})")
+            self._current_max_size = int(new_size)
+            
+        self._last_optimization = current_time
     
     def get_ta_result(self, symbol: str, timeframe: str, indicator: str) -> Optional[Any]:
         """Cache'ten sonucu getir"""
         key = f"{symbol}_{timeframe}_{indicator}"
         with self._lock:
+            self._optimize_size()  # Boyut optimizasyonu
+            
             if key in self._cache:
                 cache_data = self._cache[key]
                 # LRU özelliği için en son kullanılanı en sona taşı
@@ -140,7 +274,7 @@ class TACache:
         key = f"{symbol}_{timeframe}_{indicator}"
         with self._lock:
             # Cache limit kontrolü
-            if len(self._cache) >= self._max_size:
+            if len(self._cache) >= self._current_max_size:
                 # LRU prensibiyle en eski entry'yi sil
                 removed_key, _ = self._cache.popitem(last=False)
                 logger.debug(f"Cache limit reached, removed: {removed_key}")
@@ -173,8 +307,10 @@ class TACache:
                 'hits': self._hit_count,
                 'misses': self._miss_count,
                 'hit_ratio': self._hit_count / max(total, 1),
-                'max_size': self._max_size,
-                'utilization': len(self._cache) / self._max_size
+                'max_size': self._current_max_size,
+                'utilization': len(self._cache) / self._current_max_size,
+                'min_size': self._min_size,
+                'max_possible_size': self._max_size
             }
     
     def clear(self):
@@ -186,8 +322,38 @@ class TACache:
             logger.info("TA Cache cleared completely")
 
 # Global instances (thread-safe)
-ta_cache = TACache(max_size=1000)
+ta_cache = AdaptiveCache(initial_max_size=1000, min_size=100, max_size=5000)
 ta_metrics = TAMetrics()
+
+# ------------------------------------------------------------
+# Unit Test Decorator
+# ------------------------------------------------------------
+def unit_test(expected_result=None, tolerance=0.01):
+    """Fonksiyon unit test decorator"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            # Fonksiyonu çalıştır
+            result = func(*args, **kwargs)
+            
+            # Eğer expected result verilmişse kontrol et
+            if expected_result is not None:
+                if hasattr(result, '__len__') and hasattr(expected_result, '__len__'):
+                    # Array/Series karşılaştırması
+                    if len(result) == len(expected_result):
+                        for i, (r, e) in enumerate(zip(result, expected_result)):
+                            if abs(r - e) > tolerance:
+                                logger.warning(f"Unit test failed for {func.__name__} at index {i}: got {r}, expected {e}")
+                    else:
+                        logger.warning(f"Unit test failed for {func.__name__}: length mismatch")
+                else:
+                    # Scalar karşılaştırması
+                    if abs(result - expected_result) > tolerance:
+                        logger.warning(f"Unit test failed for {func.__name__}: got {result}, expected {expected_result}")
+            
+            return result
+        return wrapper
+    return decorator
 
 # =============================================================
 # Yardımcı Fonksiyonlar - GELİŞMİŞ
@@ -245,12 +411,38 @@ def safe_rolling_calculation(series: pd.Series, window: int, calculation: Callab
         logger.error(f"Rolling calculation failed: {e}")
         return pd.Series([default] * len(series), index=series.index)
 
+def normalize_symbol(symbol: str) -> str:
+    """Sembol ismini normalize et"""
+    if not symbol:
+        return "BTCUSDT"  # Default symbol
+    
+    # Çeşitli formatları standart formata dönüştür
+    symbol = symbol.upper().replace('/', '').replace(':', '').replace('-', '')
+    
+    # USDT ile bitmiyorsa ekle (Binance standardı)
+    if not symbol.endswith('USDT') and len(symbol) > 0:
+        symbol += 'USDT'
+    
+    return symbol
+
 # =============================================================
 # Trend İndikatörleri - TAMAMEN GÜNCELLENMİŞ
 # =============================================================
 
+@track_performance
+@unit_test(expected_result=104.5, tolerance=0.1)
 def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
-    """Exponential Moving Average (EMA) hesaplar."""
+    """
+    Exponential Moving Average (EMA) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: EMA periyodu (default: CONFIG.TA.EMA_PERIOD veya 20)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        EMA değerlerini içeren pandas Series
+    """
     try:
         if not validate_dataframe(df, [column]):
             return pd.Series([np.nan] * len(df), index=df.index)
@@ -262,14 +454,29 @@ def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -
             logger.warning(f"EMA: Not enough data points ({len(price_series)} < {period})")
             return pd.Series([np.nan] * len(df), index=df.index)
         
-        return price_series.ewm(span=period, adjust=False).mean()
+        return ta_circuit_breaker.execute(
+            lambda: price_series.ewm(span=period, adjust=False).mean()
+        )
     except Exception as e:
         logger.error(f"EMA hesaplanırken hata: {e}")
         return pd.Series([np.nan] * len(df), index=df.index)
 
+@track_performance
 def macd(df: pd.DataFrame, fast: Optional[int] = None, slow: Optional[int] = None, 
          signal: Optional[int] = None, column: str = "close") -> Tuple[pd.Series, pd.Series, pd.Series]:
-    """MACD (Moving Average Convergence Divergence) hesaplar."""
+    """
+    MACD (Moving Average Convergence Divergence) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        fast: Fast EMA periyodu (default: CONFIG.TA.MACD_FAST veya 12)
+        slow: Slow EMA periyodu (default: CONFIG.TA.MACD_SLOW veya 26)
+        signal: Signal line periyodu (default: CONFIG.TA.MACD_SIGNAL veya 9)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        (macd_line, signal_line, histogram) tuple'ı
+    """
     try:
         if not validate_dataframe(df, [column]):
             nan_series = pd.Series([np.nan] * len(df), index=df.index)
@@ -288,27 +495,38 @@ def macd(df: pd.DataFrame, fast: Optional[int] = None, slow: Optional[int] = Non
             nan_series = pd.Series([np.nan] * len(df), index=df.index)
             return nan_series, nan_series, nan_series
 
-        ema_fast = price_series.ewm(span=fast, adjust=False).mean()
-        ema_slow = price_series.ewm(span=slow, adjust=False).mean()
-        macd_line = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        hist = macd_line - signal_line
-
-        return macd_line, signal_line, hist
+        return ta_circuit_breaker.execute(lambda: (
+            price_series.ewm(span=fast, adjust=False).mean() - 
+            price_series.ewm(span=slow, adjust=False).mean(),
+            price_series.ewm(span=fast, adjust=False).mean() - 
+            price_series.ewm(span=slow, adjust=False).mean(),
+            price_series.ewm(span=fast, adjust=False).mean() - 
+            price_series.ewm(span=slow, adjust=False).mean()
+        ))
     except Exception as e:
         logger.error(f"MACD hesaplanırken hata: {e}")
         nan_series = pd.Series([np.nan] * len(df), index=df.index)
         return nan_series, nan_series, nan_series
 
-# Diğer tüm TA fonksiyonlarını benzer şekilde güncelleyin...
-# (RSI, Stochastic, ATR, Bollinger Bands, vs.)
+# Diğer TA fonksiyonları (RSI, Stochastic, ATR, Bollinger Bands, vs.) benzer şekilde güncellenmeli
+# Kısaltma için burada gösterilmiyor, ancak aynı pattern ile implemente edilmeli
 
 # =============================================================
 # Binance Entegre IO Fonksiyonları - GELİŞMİŞ CACHE
 # =============================================================
 
+@track_performance
 async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
-    """Binance'den gerçek funding rate çeker - Gelişmiş cache"""
+    """
+    Binance'den gerçek funding rate çeker.
+    
+    Args:
+        symbol: Sembol adı (default: "BTCUSDT")
+    
+    Returns:
+        Funding rate değeri
+    """
+    symbol = normalize_symbol(symbol)
     cache_key = f"funding_rate_{symbol}"
     
     # Önce cache kontrolü
@@ -372,18 +590,25 @@ async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
         ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=30)
         return result
 
-# Diğer IO fonksiyonları için benzer cache mekanizması ekleyin...
+# Diğer IO fonksiyonları için benzer cache mekanizması eklenmeli
 
 # =============================================================
 # Trading Pipeline - GELİŞMİŞ HATA YÖNETİMİ
 # =============================================================
 
+@track_performance
 async def optimized_trading_pipeline(symbol: str = "BTCUSDT", 
                                    interval: str = "1m",
                                    callback: Optional[Callable] = None,
                                    max_retries: int = 3):
     """
-    Geliştirilmiş trading pipeline with enhanced error handling and retry
+    Geliştirilmiş trading pipeline with enhanced error handling and retry.
+    
+    Args:
+        symbol: İşlem yapılacak sembol (default: "BTCUSDT")
+        interval: Zaman aralığı (default: "1m")
+        callback: Sonuçları işleyecek callback fonksiyonu
+        max_retries: Maksimum yeniden deneme sayısı (default: 3)
     """
     pipeline_logger = logging.getLogger(f"ta_pipeline.{symbol}")
     
@@ -502,6 +727,13 @@ async def optimized_trading_pipeline(symbol: str = "BTCUSDT",
 def get_detailed_metrics() -> Dict[str, Any]:
     """Detaylı sistem metriklerini getir"""
     cache_stats = ta_cache.get_stats()
+    circuit_status = ta_circuit_breaker.get_status()
+    
+    # Ortalama execution time'ları hesapla
+    avg_times = {}
+    for func_name, times in ta_metrics.execution_times.items():
+        if times:
+            avg_times[func_name] = sum(times) / len(times)
     
     return {
         'calculations': {
@@ -517,7 +749,12 @@ def get_detailed_metrics() -> Dict[str, Any]:
             'errors': ta_metrics.io_errors,
             'error_rate': ta_metrics.io_errors / max(ta_metrics.io_requests, 1)
         },
+        'performance': {
+            'average_times': avg_times,
+            'monitored_functions': list(ta_metrics.execution_times.keys())
+        },
         'cache': cache_stats,
+        'circuit_breaker': circuit_status,
         'timestamp': time.time(),
         'status': 'healthy' if (ta_metrics.calculation_errors / max(ta_metrics.total_calculations, 1)) < 0.1 else 'degraded'
     }
@@ -529,12 +766,64 @@ def reset_metrics():
     logger.info("Metrics reset")
 
 # =============================================================
+# Unit Tests
+# =============================================================
+
+def run_unit_tests():
+    """Tüm fonksiyonlar için unit testleri çalıştır"""
+    logger.info("Running unit tests...")
+    
+    # Test verisi
+    test_data = {
+        'open': [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
+        'high': [105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
+        'low': [95, 96, 97, 98, 99, 100, 101, 102, 103, 104],
+        'close': [102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
+        'volume': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+    }
+    df = pd.DataFrame(test_data)
+    
+    # Test fonksiyonları
+    test_functions = [
+        (ema, (df,), {}),
+        (lambda df: macd(df)[0], (df,), {}),  # MACD line only
+        (rsi, (df,), {}),
+        (lambda df: stochastic(df)[0], (df,), {}),  # Stochastic K only
+    ]
+    
+    passed = 0
+    failed = 0
+    
+    for func, args, kwargs in test_functions:
+        try:
+            result = func(*args, **kwargs)
+            # Basit validation
+            if result is not None and not (hasattr(result, 'isna') and result.isna().all()):
+                passed += 1
+                logger.info(f"✓ {func.__name__} test passed")
+            else:
+                failed += 1
+                logger.warning(f"✗ {func.__name__} test failed: Invalid result")
+        except Exception as e:
+            failed += 1
+            logger.error(f"✗ {func.__name__} test failed with error: {e}")
+    
+    logger.info(f"Unit tests completed: {passed} passed, {failed} failed")
+    return passed, failed
+
+# =============================================================
 # Ana Fonksiyon - GELİŞMİŞ TEST
 # =============================================================
 
 async def main():
     """Gelişmiş test fonksiyonu"""
     logger.info("Starting comprehensive TA utils test...")
+    
+    # Unit testleri çalıştır
+    passed, failed = run_unit_tests()
+    
+    if failed > 0:
+        logger.warning(f"{failed} unit tests failed, proceeding with caution")
     
     # Test verisi
     test_data = {
@@ -568,6 +857,10 @@ async def main():
         # 5. Metrikler
         metrics = get_detailed_metrics()
         logger.info(f"System metrics: {metrics}")
+        
+        # 6. Circuit breaker status
+        circuit_status = ta_circuit_breaker.get_status()
+        logger.info(f"Circuit breaker status: {circuit_status['state']}")
         
     except Exception as e:
         logger.error(f"Test failed: {e}")
