@@ -4,7 +4,7 @@
 # /dar Z    → ZIP (tree.txt + içerikler, sadece listelenen dosyalar + .env + .gitignore)
 # /dar k    → Alfabetik komut listesi (+ açıklamalar)
 # /dar txt  → Projedeki tüm geçerli dosyaların içeriği tek bir .txt dosyada
-# dosya adi .env den alir TELEGRAM_BOT_NAME
+# dosya adi .env den alir TELEGRAM_NAME
 
 import os
 import re
@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 from handlers.command_info import COMMAND_INFO  # ✅ komut açıklamaları import edildi
 
 load_dotenv()  # .env dosyasını yükle
-TELEGRAM_BOT_NAME = os.getenv("TELEGRAM_BOT_NAME", "xbot")  # .env varsa bot adı, yoksa "xbot"
+TELEGRAM_NAME = os.getenv("TELEGRAM_NAME", "xbot")  # .env varsa bot adı, yoksa "xbot"
 
 ROOT_DIR = '.'
 TELEGRAM_MSG_LIMIT = 4000
@@ -152,7 +152,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     timestamp = datetime.now().strftime("%m%d_%H%M")
 
     if mode == "txt":
-        txt_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.txt"
+        txt_filename = f"{TELEGRAM_NAME}_{timestamp}.txt"
         try:
             with open(txt_filename, 'w', encoding='utf-8') as out:
                 for filepath in valid_files:
@@ -178,7 +178,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if mode.upper() == "Z":
-        zip_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.zip"
+        zip_filename = f"{TELEGRAM_NAME}_{timestamp}.zip"
         try:
             create_zip_with_tree_and_files(ROOT_DIR, zip_filename)
             with open(zip_filename, "rb") as f:
@@ -191,7 +191,7 @@ async def dar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(tree_text) > TELEGRAM_MSG_LIMIT:
-        txt_filename = f"{TELEGRAM_BOT_NAME}_{timestamp}.txt"
+        txt_filename = f"{TELEGRAM_NAME}_{timestamp}.txt"
         try:
             with open(txt_filename, 'w', encoding='utf-8') as f:
                 f.write(tree_text)
