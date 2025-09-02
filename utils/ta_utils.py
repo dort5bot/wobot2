@@ -481,7 +481,7 @@ async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
         client = await get_global_binance_client()
         
         if client is None:
-            LOG.warning("Binance client not available for funding rate")
+            logger.warning("Binance client not available for funding rate")  # LOG yerine logger
             return 0.001
             
         try:
@@ -491,13 +491,13 @@ async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
             
         except Exception as e:
             if "authentication" in str(e).lower() or "api" in str(e).lower():
-                LOG.warning(f"Funding rate için yetki yetersiz: {e}")
+                logger.warning(f"Funding rate için yetki yetersiz: {e}")  # LOG yerine logger
             else:
-                LOG.error(f"Funding rate çekme hatası: {e}")
+                logger.error(f"Funding rate çekme hatası: {e}")  # LOG yerine logger
             return 0.001
                 
     except Exception as e:
-        LOG.error(f"Funding rate çekilemedi: {e}")
+        logger.error(f"Funding rate çekilemedi: {e}")  # LOG yerine logger
         return 0.001
 
 async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
@@ -507,7 +507,7 @@ async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
         client = await get_global_binance_client()
         
         if client is None:
-            LOG.warning("Binance client not available for order book")
+            logger.warning("Binance client not available for order book")  # LOG -> logger
             return 0.0
             
         # CCXT ile order book
@@ -522,7 +522,7 @@ async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
         return (bid_vol - ask_vol) / denom
         
     except Exception as e:
-        LOG.error(f"Order book imbalance hesaplanamadı: {e}")
+        logger.error(f"Order book imbalance hesaplanamadı: {e}")  # LOG -> logger
         return 0.0        # Fallback değer
 
 async def fetch_social_sentiment_binance(symbol: str = "BTC") -> Dict[str, float]:
@@ -1250,6 +1250,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
 
