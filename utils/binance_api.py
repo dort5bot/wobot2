@@ -982,10 +982,16 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
     """Global BinanceClient instance'ını getir veya oluştur"""
     global binance_client
     if binance_client is None:
+        if api_key is None:
+            api_key = os.getenv("BINANCE_API_KEY")
+        if secret_key is None:
+            secret_key = os.getenv("BINANCE_API_SECRET")
         binance_client = BinanceClient(api_key, secret_key)
     return binance_client
 
+
 # EOF
+
 
 
 
