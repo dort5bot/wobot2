@@ -481,23 +481,40 @@ async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
         client = await get_global_binance_client()
         
         if client is None:
-            logger.warning("Binance client not available for funding rate")  # LOG yerine logger
+            logger.warning("Binance client not available for funding rate")
             return 0.001
             
         try:
-            # CCXT ile funding rate
-            funding_data = await client.fetch_funding_rate(symbol)
-            return float(funding_data['fundingRate']) if funding_data else 0.001
+            # Önce futures marketlerini yükle
+            await client.load_markets()
             
+            # Sembolün futures markette olup olmadığını kontrol et
+            futures_symbol = symbol.replace('/', '').replace(':', '').upper()
+            if futures_symbol not in client.markets:
+                logger.warning(f"Symbol {futures_symbol} not found in futures markets")
+                return 0.001
+            
+            market = client.markets[futures_symbol]
+            
+            # Yalnızca linear ve inverse contract'lar için funding rate al
+            if market.get('linear', False) or market.get('inverse', False):
+                funding_data = await client.fetch_funding_rate(symbol)
+                return float(funding_data['fundingRate']) if funding_data else 0.001
+            else:
+                logger.warning(f"Symbol {futures_symbol} is not a linear or inverse contract, skipping funding rate")
+                return 0.001
+                
         except Exception as e:
             if "authentication" in str(e).lower() or "api" in str(e).lower():
-                logger.warning(f"Funding rate için yetki yetersiz: {e}")  # LOG yerine logger
+                logger.warning(f"Funding rate için yetki yetersiz: {e}")
+            elif "not supported" in str(e).lower() or "fetchFundingRate" in str(e).lower():
+                logger.warning(f"Funding rate desteklenmiyor: {e}")
             else:
-                logger.error(f"Funding rate çekme hatası: {e}")  # LOG yerine logger
+                logger.error(f"Funding rate çekme hatası: {e}")
             return 0.001
                 
     except Exception as e:
-        logger.error(f"Funding rate çekilemedi: {e}")  # LOG yerine logger
+        logger.error(f"Funding rate çekilemedi: {e}")
         return 0.001
 
 async def get_live_order_book_imbalance(symbol: str = "BTCUSDT") -> float:
@@ -1250,6 +1267,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
 
