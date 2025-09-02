@@ -8,10 +8,9 @@ import asyncio
 import logging
 from contextlib import suppress
 
-# ❌ Eski: from utils.binance_api import get_binance_api
-# ✅ Yeni: 
 from utils.binance_api import get_binance_client
-from utils.ta_utils import calculate_all_ta_hybrid, generate_signals, klines_to_dataframe
+from utils.ta_utils import calculate_all_ta_hybrid, generate_signals
+from utils.binance_api import klines_to_dataframe
 from utils.config import CONFIG   # ✅ CONFIG import edildi
 
 LOG = logging.getLogger("worker_d")
