@@ -1,12 +1,12 @@
 # 🟥3🟥🟥.github/workflows/docker-deploy.yml
 # 🚀 Docker Build & Deploy (Render / Railway / Oracle VPS Auto Detect)
 # Secrets: GHCR_PAT, RENDER_DEPLOY_HOOK?, RAILWAY_DEPLOY_HOOK?, ORACLE_*?
-# 	Secret Adı	Açıklama
-# 	GHCR_PAT	GitHub Container Registry için token (write:packages)
-# 	RENDER_DEPLOY_HOOK	Render deploy URL (opsiyonel)
-# 	RAILWAY_DEPLOY_HOOK	Railway deploy URL (opsiyonel)
-# 	ORACLE_HOST	Oracle VPS IP adresi (opsiyonel)
-# 	ORACLE_SSH_KEY	Oracle VPS'e bağlanmak için private SSH key
+# 	Secret Adı	            Açıklama
+# 	GHCR_PAT	            GitHub Container Registry için token (write:packages)
+# 	RENDER_DEPLOY_HOOK	    Render deploy URL (opsiyonel)
+# 	RAILWAY_DEPLOY_HOOK	    Railway deploy URL (opsiyonel)
+# 	ORACLE_HOST	            Oracle VPS IP adresi (opsiyonel)
+# 	ORACLE_SSH_KEY	        Oracle VPS'e bağlanmak için private SSH key
 # 	ORACLE_USER (opsiyonel)	SSH kullanıcı adı (default: ubuntu)
 
 name: Docker Build & Deploy (Multi-Platform)
@@ -64,23 +64,23 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64  # ✅ Multi-arch desteği
 
-      ######################################################
-      ## Notifications: Build Success
-      ######################################################
-      - name: Notify Build Success
+      ##################################################
+      ## Notify Success
+      ##################################################
+      - name: Notify Success
         if: success()
         run: |
-          echo "✅ Docker image built and pushed successfully!"
-          echo "Image: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+          echo "✅ Image pushed to GHCR:"
+          echo "ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
           echo "Tags: ${{ steps.meta.outputs.tags }}"
 
-      ######################################################
+      ##################################################
       ## Conditional Deploy: Render
-      ######################################################
+      ##################################################
       - name: Deploy to Render (if hook exists)
         if: ${{ secrets.RENDER_DEPLOY_HOOK != '' }}
         run: |
@@ -90,7 +90,7 @@ jobs:
             --retry 3 \
             --retry-delay 5 \
             ${{ secrets.RENDER_DEPLOY_HOOK }})
-          
+
           if [ "$response" -eq 200 ]; then
             echo "✅ Render deploy triggered successfully"
           else
@@ -98,9 +98,9 @@ jobs:
             exit 1
           fi
 
-      ######################################################
+      ##################################################
       ## Conditional Deploy: Railway
-      ######################################################
+      ##################################################
       - name: Deploy to Railway (if hook exists)
         if: ${{ secrets.RAILWAY_DEPLOY_HOOK != '' }}
         run: |
@@ -110,7 +110,7 @@ jobs:
             --retry 3 \
             --retry-delay 5 \
             ${{ secrets.RAILWAY_DEPLOY_HOOK }})
-          
+
           if [ "$response" -eq 200 ]; then
             echo "✅ Railway deploy triggered successfully"
           else
@@ -118,9 +118,9 @@ jobs:
             exit 1
           fi
 
-      ######################################################
+      ##################################################
       ## Conditional Deploy: Oracle VPS via SSH
-      ######################################################
+      ##################################################
       - name: Deploy to Oracle (if SSH config exists)
         if: ${{ secrets.ORACLE_HOST != '' && secrets.ORACLE_SSH_KEY != '' }}
         env:
@@ -128,81 +128,52 @@ jobs:
         run: |
           echo "🔁 Preparing Oracle VPS deployment..."
           
-          # SSH key'i güvenli şekilde yaz
           echo "$ORACLE_SSH_KEY" > private_key.pem
           chmod 600 private_key.pem
           
-          # SSH connection test
-          echo "Testing SSH connection..."
-          ssh -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} "echo 'SSH connection successful'"
-          
-          echo "🚀 Deploying to Oracle VPS..."
+          echo "🔐 Testing SSH connection..."
+          ssh -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} "echo 'SSH OK'"
+
+          echo "🚀 Deploying on Oracle VPS..."
           ssh -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} << 'EOF'
-            echo "Pulling latest image..."
+            echo "🔄 Pulling latest image..."
             docker pull ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-            
-            echo "Stopping existing container..."
-            docker stop app || true
-            docker rm app || true
-            
-            echo "Starting new container..."
+
+            echo "🛑 Stopping old container..."
+            docker stop app || true && docker rm app || true
+
+            echo "🚀 Starting new container..."
             docker run -d \
               --name app \
-              -p 80:3000 \
-              -e PORT=3000 \
+              -p 80:10000 \
+              -e PORT=10000 \
               -e NODE_ENV=production \
               --restart unless-stopped \
-              --health-cmd="curl -f http://localhost:3000/health || exit 1" \
+              --health-cmd="curl -f http://localhost:10000/ || exit 1" \
               --health-interval=30s \
               --health-timeout=3s \
               --health-retries=3 \
               ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-            
-            echo "✅ Deployment completed successfully!"
-            echo "Container status:"
-            docker ps --filter "name=app" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+            echo "✅ Deployed on Oracle VPS!"
+            docker ps --filter "name=app"
           EOF
-          
-          # Cleanup sensitive key
+
           rm -f private_key.pem
 
-      ######################################################
-      ## Conditional Deploy: Docker Compose (Alternatif)
-      ######################################################
-      - name: Deploy with Docker Compose (if compose file exists)
-        if: ${{ secrets.ORACLE_HOST != '' && secrets.ORACLE_SSH_KEY != '' && hashFiles('docker-compose.yml') }}
-        env:
-          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
-        run: |
-          echo "🔁 Deploying with Docker Compose..."
-          echo "$ORACLE_SSH_KEY" > private_key.pem
-          chmod 600 private_key.pem
-          
-          # Docker Compose dosyasını kopyala ve çalıştır
-          scp -i private_key.pem -o StrictHostKeyChecking=no docker-compose.yml ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }}:~/app/
-          
-          ssh -i private_key.pem -o StrictHostKeyChecking=no ${{ secrets.ORACLE_USER || 'ubuntu' }}@${{ secrets.ORACLE_HOST }} << 'EOF'
-            cd ~/app
-            docker-compose pull
-            docker-compose up -d --force-recreate
-            docker-compose ps
-          EOF
-          
-          rm -f private_key.pem
-
-      ######################################################
-      ## Fallback: No Deploy Target
-      ######################################################
+      ##################################################
+      ## No Deploy Target Found (fallback)
+      ##################################################
       - name: No Deploy Target Found
         if: ${{ secrets.RENDER_DEPLOY_HOOK == '' && secrets.RAILWAY_DEPLOY_HOOK == '' && (secrets.ORACLE_HOST == '' || secrets.ORACLE_SSH_KEY == '') }}
         run: |
-          echo "⚠️ No deploy target detected. Skipping deployment."
-          echo "Available images:"
-          echo "ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.meta.outputs.tags }}"
+          echo "⚠️ No deployment target detected. Only GHCR push done."
+          echo "Image: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
 
-      ######################################################
-      ## Notifications: Summary
-      ######################################################
+      ##################################################
+      ## Deployment Summary
+      ##################################################
       - name: Deployment Summary
         if: always()
         run: |
@@ -213,4 +184,3 @@ jobs:
           echo "Image: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}"
           echo "Tags: ${{ steps.meta.outputs.tags }}"
           echo "Status: ${{ job.status }}"
-
