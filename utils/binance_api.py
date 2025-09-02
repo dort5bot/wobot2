@@ -574,21 +574,28 @@ class BinanceWebSocketManager:
 # Veri Formatı Dönüşüm Fonksiyonları
 # -------------------------------------------------------------
 def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
-    """Kline verisini pandas DataFrame'e dönüştür"""
-    df = pd.DataFrame(klines, columns=[
-        'open_time', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_asset_volume', 'number_of_trades',
-        'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-    ])
+    """Kline verisini pandas DataFrame'e dönüştür - CCXT uyumlu"""
+    try:
+        # CCXT formatı: [timestamp, open, high, low, close, volume]
+        df = pd.DataFrame(klines, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume'
+        ])
+        
+        # Sayısal kolonları dönüştür
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Timestamp'i datetime'a çevir ve index olarak ayarla
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        
+        return df
     
-    numeric_cols = ['open', 'high', 'low', 'close', 'volume']
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
-    df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
-    df.set_index('open_time', inplace=True)
-    return df[['open', 'high', 'low', 'close', 'volume']]
+    except Exception as e:
+        LOG.error(f"OHLCV to DataFrame dönüşümünde hata: {e}")
+        # Fallback: boş DataFrame döndür
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
 
 # -------------------------------------------------------------
 # BinanceClient Wrapper - YENİ MİMARİ
@@ -969,6 +976,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
     return binance_client
 
 # EOF
+
 
 
 
