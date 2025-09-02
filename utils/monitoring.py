@@ -55,6 +55,14 @@ LOG_DIR = os.getenv("LOG_DIR", "wobot1/logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "bot.log")
 
+# Dizin oluşturma işlemini try-except ile sar
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+except PermissionError:
+    # İzin hatası durumunda alternatif dizin kullan
+    LOG_DIR = "./logs"
+    os.makedirs(LOG_DIR, exist_ok=True)
+    logging.warning(f"Permission denied for wobot1/logs, using {LOG_DIR} instead")
 
 def configure_logging(level=logging.INFO):
     """
@@ -249,4 +257,5 @@ if __name__ == "__main__":
     asyncio.run(test())
 
 # EOF
+
 
