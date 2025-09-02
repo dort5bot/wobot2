@@ -360,6 +360,7 @@ def unit_test(expected_result=None, tolerance=0.01):
 # Yardımcı Fonksiyonlar - GELİŞMİŞ
 # =============================================================
 
+# Güncellenmiş validate_dataframe
 def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> bool:
     """DataFrame'in geçerli olup olmadığını kontrol et"""
     if df is None or df.empty:
@@ -374,7 +375,7 @@ def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> 
         logger.warning(f"DataFrame missing required columns: {missing_columns}")
         return False
     
-    # NaN kontrolü
+    # NaN kontrolü - any() kullanarak scalar boolean döndür
     if df[required_columns].isna().all().any():
         logger.warning("All values are NaN in some columns")
         return False
@@ -509,28 +510,21 @@ def macd(df: pd.DataFrame, fast: Optional[int] = None, slow: Optional[int] = Non
         return nan_series, nan_series, nan_series
 
 @track_performance
+# Güncellenmiş ADX
+@track_performance
 def adx(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
-    """
-    Average Directional Index (ADX) hesaplar.
-    
-    Args:
-        df: OHLCV verilerini içeren DataFrame
-        period: ADX periyodu (default: CONFIG.TA.ADX_PERIOD veya 14)
-    
-    Returns:
-        ADX değerlerini içeren pandas Series
-    """
+    """Average Directional Index (ADX) hesaplar."""
     try:
         if not validate_dataframe(df):
             return pd.Series([np.nan] * len(df), index=df.index)
         
         period = period or getattr(CONFIG.TA, 'ADX_PERIOD', 14)
         
-        # TR, +DM, -DM hesaplama
         high = safe_column_access(df, 'high')
         low = safe_column_access(df, 'low')
         close = safe_column_access(df, 'close')
         
+        # TR, +DM, -DM hesaplama
         tr1 = high - low
         tr2 = abs(high - close.shift(1))
         tr3 = abs(low - close.shift(1))
@@ -542,16 +536,13 @@ def adx(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
         
-        # Wilder's smoothing
-        def wilder_smoothing(series, period):
-            return series.ewm(alpha=1/period, adjust=False).mean()
-        
-        tr_smooth = wilder_smoothing(tr, period)
-        plus_di = 100 * wilder_smoothing(plus_dm, period) / tr_smooth
-        minus_di = 100 * wilder_smoothing(minus_dm, period) / tr_smooth
+        # Wilder's smoothing - pandas Series olarak
+        tr_smooth = tr.ewm(alpha=1/period, adjust=False).mean()
+        plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean() / tr_smooth
+        minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(alpha=1/period, adjust=False).mean() / tr_smooth
         
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-12)
-        adx_val = wilder_smoothing(dx, period)
+        adx_val = dx.ewm(alpha=1/period, adjust=False).mean()
         
         return ta_circuit_breaker.execute(lambda: adx_val)
     except Exception as e:
@@ -1315,12 +1306,10 @@ def calculate_all_ta_hybrid(df: pd.DataFrame, symbol: str = "default",
 # =============================================================
 
 # --- 1) Kalman:
+# Güncellenmiş Kalman filter (fillna düzeltmesi)
 @track_performance
 def kalman_filter_series(prices: pd.Series, q: Optional[float] = None, r: Optional[float] = None) -> pd.Series:
-    """
-    Minimal 1D random-walk Kalman.
-    Q: process noise, R: measurement noise (CONFIG.TA'dan gelir)
-    """
+    """Minimal 1D random-walk Kalman."""
     try:
         if q is None:
             q = getattr(CONFIG.TA, "KALMAN_Q", 1e-5)
@@ -1332,7 +1321,8 @@ def kalman_filter_series(prices: pd.Series, q: Optional[float] = None, r: Option
         out = []
         initialized = False
 
-        vals = prices.fillna(method="ffill").values
+        # fillna düzeltmesi
+        vals = prices.ffill().values
         for z in vals:
             z = float(z)
             if not initialized:
@@ -1366,11 +1356,13 @@ def _hilbert_fallback(x: np.ndarray) -> np.ndarray:
         h[0] = 1; h[1:(n+1)//2] = 2
     return np.fft.ifft(Xf * h)
 
+# Güncellenmiş Hilbert features (fillna düzeltmesi)
 @track_performance
 def hilbert_features(prices: pd.Series) -> dict:
     """Hilbert transform features"""
     try:
-        x = prices.fillna(method="ffill").values.astype(float)
+        # fillna düzeltmesi
+        x = prices.ffill().values.astype(float)
         try:
             from scipy.signal import hilbert
             analytic = hilbert(x)
@@ -1655,34 +1647,49 @@ def generate_signals(df: pd.DataFrame, ref_series: Optional[pd.Series] = None) -
         ema_periods = getattr(CONFIG.TA, "EMA_PERIODS", [20, 50])
         ema_fast = ema(df, period=ema_periods[0])
         ema_slow = ema(df, period=ema_periods[1])
-        indicators["ema_fast"] = float(ema_fast.iloc[-1]) if not ema_fast.empty else np.nan
-        indicators["ema_slow"] = float(ema_slow.iloc[-1]) if not ema_slow.empty else np.nan
-        ema_signal = 1 if indicators["ema_fast"] > indicators["ema_slow"] else -1
+        
+        # Series değil, scalar değerler al
+        ema_fast_val = float(ema_fast.iloc[-1]) if not ema_fast.empty else np.nan
+        ema_slow_val = float(ema_slow.iloc[-1]) if not ema_slow.empty else np.nan
+        
+        indicators["ema_fast"] = ema_fast_val
+        indicators["ema_slow"] = ema_slow_val
+        ema_signal = 1 if ema_fast_val > ema_slow_val else -1
 
-        # MACD
+        # MACD - scalar değer al
         macd_line, signal_line, _ = macd(df)
         macd_val = float(macd_line.iloc[-1] - signal_line.iloc[-1]) if not macd_line.empty and not signal_line.empty else 0.0
         indicators["macd"] = macd_val
         macd_signal = 1 if macd_val > 0 else -1
 
-        # Momentum: RSI
-        rsi_val = float(rsi(df).iloc[-1]) if not rsi(df).empty else 50.0
+        # Momentum: RSI - scalar değer al
+        rsi_series = rsi(df)
+        rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
         indicators["rsi"] = rsi_val
         rsi_signal = 1 if rsi_val < 30 else (-1 if rsi_val > 70 else 0)
 
-        # Volatilite: ATR
-        atr_val = atr(df)
-        indicators["atr"] = float(atr_val.iloc[-1]) if not atr_val.empty else np.nan
+        # Volatilite: ATR - scalar değer al
+        atr_series = atr(df)
+        indicators["atr"] = float(atr_series.iloc[-1]) if not atr_series.empty else np.nan
 
-        # Hacim: OBV (tek hesap)
+        # Hacim: OBV - scalar değer al
         obv_series = obv(df)
         obv_val = float(obv_series.iloc[-1]) if not obv_series.empty else 0.0
         indicators["obv"] = obv_val
-        obv_signal = 1 if len(obv_series) > 20 and obv_val > float(obv_series.iloc[-20]) else -1
+        
+        # OBV sinyalini doğru hesapla
+        obv_signal = 1
+        if len(obv_series) > 20:
+            obv_prev = float(obv_series.iloc[-20]) if not obv_series.empty else 0.0
+            obv_signal = 1 if obv_val > obv_prev else -1
+        else:
+            obv_signal = -1
 
         weights = {"ema":0.3, "macd":0.3, "rsi":0.2, "obv":0.2}
-        score = (ema_signal*weights["ema"] + macd_signal*weights["macd"] +
-                 rsi_signal*weights["rsi"] + obv_signal*weights["obv"])
+        score = (ema_signal * weights["ema"] + 
+                 macd_signal * weights["macd"] +
+                 rsi_signal * weights["rsi"] + 
+                 obv_signal * weights["obv"])
 
         # Eşikleri config'ten al
         long_threshold = getattr(CONFIG.TA, "ALPHA_LONG_THRESHOLD", 0.6)
@@ -2204,3 +2211,4 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
+
