@@ -726,18 +726,384 @@ def stochastic(df: pd.DataFrame, k_period: Optional[int] = None, d_period: Optio
 
 # =============================================================
 # Volatilite
-
-# Diğer TA fonksiyonları (RSI, Stochastic, ATR, Bollinger Bands, vs.) benzer şekilde güncellenmeli
-# Kısaltma için burada gösterilmiyor, ancak aynı pattern ile implemente edilmeli
-
-# =============================================================
-# Binance Entegre IO Fonksiyonları - GELİŞMİŞ CACHE
+# Volatilite & Risk İndikatörleri - TAMAMEN GÜNCELLENMİŞ
 # =============================================================
 
 @track_performance
-async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
+def atr(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
     """
-    Binance'den gerçek funding rate çeker.
+    Average True Range (ATR) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: ATR periyodu (default: CONFIG.TA.ATR_PERIOD veya 14)
+    
+    Returns:
+        ATR değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        period = period or getattr(CONFIG.TA, 'ATR_PERIOD', 14)
+        
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        close = safe_column_access(df, 'close')
+        
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        return ta_circuit_breaker.execute(lambda: tr.rolling(window=period).mean())
+    except Exception as e:
+        logger.error(f"ATR hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def bollinger_bands(df: pd.DataFrame, period: Optional[int] = None, 
+                   std_dev: Optional[float] = None, column: str = "close") -> Tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Bollinger Bands hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: BB periyodu (default: CONFIG.TA.BB_PERIOD veya 20)
+        std_dev: Standart sapma çarpanı (default: CONFIG.TA.BB_STDDEV veya 2.0)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        (upper_band, middle_band, lower_band) tuple'ı
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            nan_series = pd.Series([np.nan] * len(df), index=df.index)
+            return nan_series, nan_series, nan_series
+
+        period = period or getattr(CONFIG.TA, 'BB_PERIOD', 20)
+        std_dev = std_dev or getattr(CONFIG.TA, 'BB_STDDEV', 2.0)
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < period:
+            logger.warning(f"Bollinger Bands: Not enough data points ({len(price_series)} < {period})")
+            nan_series = pd.Series([np.nan] * len(df), index=df.index)
+            return nan_series, nan_series, nan_series
+        
+        middle_band = price_series.rolling(window=period).mean()
+        std = price_series.rolling(window=period).std()
+        upper_band = middle_band + (std_dev * std)
+        lower_band = middle_band - (std_dev * std)
+        
+        return ta_circuit_breaker.execute(lambda: (upper_band, middle_band, lower_band))
+    except Exception as e:
+        logger.error(f"Bollinger Bands hesaplanırken hata: {e}")
+        nan_series = pd.Series([np.nan] * len(df), index=df.index)
+        return nan_series, nan_series, nan_series
+
+@track_performance
+def sharpe_ratio(df: pd.DataFrame, risk_free_rate: Optional[float] = None, 
+                period: Optional[int] = None, column: str = "close") -> pd.Series:
+    """
+    Sharpe Ratio hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        risk_free_rate: Risksiz faiz oranı (default: CONFIG.TA.SHARPE_RISK_FREE_RATE veya 0.02)
+        period: Sharpe periyodu (default: CONFIG.TA.SHARPE_PERIOD veya 252)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        Sharpe Ratio değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        risk_free_rate = risk_free_rate or getattr(CONFIG.TA, 'SHARPE_RISK_FREE_RATE', 0.02)
+        period = period or getattr(CONFIG.TA, 'SHARPE_PERIOD', 252)
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < 2:
+            logger.warning("Sharpe Ratio: Not enough data points for returns calculation")
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        returns = price_series.pct_change()
+        excess_returns = returns - (risk_free_rate / period)
+        
+        # Yıllıklaştırılmış Sharpe Ratio
+        sharpe = (excess_returns.rolling(window=period).mean() / 
+                 (excess_returns.rolling(window=period).std() + 1e-12)) * np.sqrt(period)
+        
+        return ta_circuit_breaker.execute(lambda: sharpe)
+    except Exception as e:
+        logger.error(f"Sharpe Ratio hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def max_drawdown(df: pd.DataFrame, column: str = "close") -> pd.Series:
+    """
+    Max Drawdown hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        Max Drawdown değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        price_series = safe_column_access(df, column)
+        
+        rolling_max = price_series.expanding().max()
+        drawdown = (price_series - rolling_max) / (rolling_max + 1e-12)
+        
+        return ta_circuit_breaker.execute(lambda: drawdown)
+    except Exception as e:
+        logger.error(f"Max Drawdown hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def historical_volatility(df: pd.DataFrame, period: int = 30, column: str = "close") -> pd.Series:
+    """
+    Historical Volatility (annualized, %) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: HV periyodu (default: 30)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        Historical Volatility değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < 2:
+            logger.warning("Historical Volatility: Not enough data points for returns calculation")
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        log_returns = np.log(price_series / price_series.shift(1))
+        volatility = log_returns.rolling(window=period).std() * np.sqrt(252) * 100
+        
+        return ta_circuit_breaker.execute(lambda: volatility)
+    except Exception as e:
+        logger.error(f"Historical Volatility hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def ulcer_index(df: pd.DataFrame, period: int = 14, column: str = "close") -> pd.Series:
+    """
+    Ulcer Index hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: UI periyodu (default: 14)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        Ulcer Index değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < period:
+            logger.warning(f"Ulcer Index: Not enough data points ({len(price_series)} < {period})")
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        rolling_max = price_series.rolling(window=period).max()
+        drawdown = (price_series - rolling_max) / (rolling_max + 1e-12) * 100
+        ulcer_idx = np.sqrt((drawdown.pow(2)).rolling(window=period).mean())
+        
+        return ta_circuit_breaker.execute(lambda: ulcer_idx)
+    except Exception as e:
+        logger.error(f"Ulcer Index hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+# =============================================================
+# Hacim & Likidite İndikatörleri - TAMAMEN GÜNCELLENMİŞ
+# =============================================================
+
+@track_performance
+def obv(df: pd.DataFrame) -> pd.Series:
+    """
+    On-Balance Volume (OBV) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+    
+    Returns:
+        OBV değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        close = safe_column_access(df, 'close')
+        volume = safe_column_access(df, 'volume')
+        
+        obv = (np.sign(close.diff()) * volume).fillna(0).cumsum()
+        
+        return ta_circuit_breaker.execute(lambda: obv)
+    except Exception as e:
+        logger.error(f"OBV hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def cmf(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """
+    Chaikin Money Flow (CMF) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: CMF periyodu (default: 20)
+    
+    Returns:
+        CMF değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        close = safe_column_access(df, 'close')
+        volume = safe_column_access(df, 'volume')
+        
+        mfm = ((close - low) - (high - close)) / (high - low + 1e-12)
+        mfv = mfm * volume
+        
+        cmf_val = mfv.rolling(window=period).sum() / volume.rolling(window=period).sum()
+        
+        return ta_circuit_breaker.execute(lambda: cmf_val)
+    except Exception as e:
+        logger.error(f"CMF hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def order_book_imbalance(bids: list, asks: list) -> float:
+    """
+    Order Book Imbalance (OBI) hesaplar.
+    
+    Args:
+        bids: Bid fiyat ve miktar listesi [(price, quantity), ...]
+        asks: Ask fiyat ve miktar listesi [(price, quantity), ...]
+    
+    Returns:
+        Order Book Imbalance değeri (-1 ile 1 arasında)
+    """
+    try:
+        if not bids or not asks:
+            logger.warning("Order Book Imbalance: Empty bids or asks")
+            return 0.0
+        
+        bid_vol = sum([b[1] for b in bids]) if bids else 0
+        ask_vol = sum([a[1] for a in asks]) if asks else 0
+        denom = (bid_vol + ask_vol) or 1e-12
+        
+        return ta_circuit_breaker.execute(lambda: (bid_vol - ask_vol) / denom)
+    except Exception as e:
+        logger.error(f"Order Book Imbalance hesaplanırken hata: {e}")
+        return 0.0
+
+@track_performance
+def open_interest_placeholder() -> None:
+    """
+    Open Interest için placeholder (borsa API ile entegre edilecek).
+    
+    Returns:
+        None
+    """
+    logger.warning("Open Interest placeholder called - implement with exchange API")
+    return None
+
+# =============================================================
+# Market Structure İndikatörleri - TAMAMEN GÜNCELLENMİŞ
+# =============================================================
+
+@track_performance
+def market_structure(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Market Structure High/Low (MSH/MSL) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+    
+    Returns:
+        Market Structure bilgilerini içeren DataFrame
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.DataFrame(index=df.index if df is not None else [])
+        
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        
+        structure = pd.DataFrame(index=df.index)
+        structure['higher_high'] = high > high.shift(1)
+        structure['lower_low'] = low < low.shift(1)
+        
+        return ta_circuit_breaker.execute(lambda: structure)
+    except Exception as e:
+        logger.error(f"Market Structure hesaplanırken hata: {e}")
+        return pd.DataFrame(index=df.index if df is not None else [])
+
+@track_performance
+def breakout(df: pd.DataFrame, period: int = 20, column: str = "close") -> pd.Series:
+    """
+    Breakout (Donchian Channel tarzı) sinyal döndürür.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: Breakout periyodu (default: 20)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        Breakout sinyallerini içeren pandas Series (1: long, -1: short, 0: no signal)
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([0] * len(df), index=df.index)
+        
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < period + 1:
+            logger.warning(f"Breakout: Not enough data points ({len(price_series)} < {period + 1})")
+            return pd.Series([0] * len(df), index=df.index)
+        
+        rolling_high = price_series.rolling(window=period).max()
+        rolling_low = price_series.rolling(window=period).min()
+        
+        cond_long = price_series > rolling_high.shift(1)
+        cond_short = price_series < rolling_low.shift(1)
+        
+        signal = pd.Series(0, index=price_series.index, dtype=float)
+        signal[cond_long] = 1.0   # Long breakout
+        signal[cond_short] = -1.0 # Short breakout
+        
+        return ta_circuit_breaker.execute(lambda: signal)
+    except Exception as e:
+        logger.error(f"Breakout hesaplanırken hata: {e}")
+        return pd.Series([0] * len(df), index=df.index)
+
+# =============================================================
+# Sentiment İndikatörleri - TAMAMEN GÜNCELLENMİŞ
+# =============================================================
+
+@track_performance
+async def funding_rate_placeholder_async(symbol: str = "BTCUSDT") -> float:
+    """
+    Asenkron funding rate placeholder (gerçek API ile değiştir).
     
     Args:
         symbol: Sembol adı (default: "BTCUSDT")
@@ -745,292 +1111,208 @@ async def fetch_funding_rate_binance(symbol: str = "BTCUSDT") -> float:
     Returns:
         Funding rate değeri
     """
-    symbol = normalize_symbol(symbol)
-    cache_key = f"funding_rate_{symbol}"
-    
-    # Önce cache kontrolü
-    cached = ta_cache.get_ta_result(symbol, "funding_rate", "funding_rate")
-    if cached is not None:
-        ta_metrics.cache_hits += 1
-        return cached
-    
-    ta_metrics.cache_misses += 1
-    ta_metrics.io_requests += 1
-    
     try:
-        from utils.binance_api import get_global_binance_client
-        client = await get_global_binance_client()
-        
-        if client is None:
-            logger.warning("Binance client not available for funding rate")
-            result = 0.001
-            ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=60)
-            return result
-            
-        try:
-            await client.load_markets()
-            
-            futures_symbol = symbol.replace('/', '').replace(':', '').upper()
-            if futures_symbol not in client.markets:
-                logger.warning(f"Symbol {futures_symbol} not found in futures markets")
-                result = 0.001
-                ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=300)
-                return result
-            
-            market = client.markets[futures_symbol]
-            
-            if market.get('linear', False) or market.get('inverse', False):
-                funding_data = await client.fetch_funding_rate(symbol)
-                result = float(funding_data['fundingRate']) if funding_data else 0.001
-                ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=300)
-                return result
-            else:
-                logger.warning(f"Symbol {futures_symbol} is not a linear or inverse contract")
-                result = 0.001
-                ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=600)
-                return result
-                
-        except Exception as e:
-            ta_metrics.io_errors += 1
-            if "authentication" in str(e).lower():
-                logger.warning(f"Funding rate için yetki yetersiz: {e}")
-            elif "not supported" in str(e).lower():
-                logger.warning(f"Funding rate desteklenmiyor: {e}")
-            else:
-                logger.error(f"Funding rate çekme hatası: {e}")
-            result = 0.001
-            ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=60)
-            return result
-                
+        await asyncio.sleep(0.05)  # Simüle edilmiş IO işlemi
+        logger.debug(f"Funding rate placeholder called for {symbol}")
+        return 0.001  # Varsayılan değer
     except Exception as e:
-        ta_metrics.io_errors += 1
-        logger.error(f"Funding rate çekilemedi: {e}")
-        result = 0.001
-        ta_cache.set_ta_result(symbol, "funding_rate", "funding_rate", result, ttl=30)
-        return result
+        logger.error(f"Funding rate placeholder error: {e}")
+        return 0.001
 
-# Diğer IO fonksiyonları için benzer cache mekanizması eklenmeli
+@track_performance
+async def social_sentiment_placeholder_async(symbol: str = "BTCUSDT") -> Dict[str, float]:
+    """
+    Asenkron sosyal sentiment placeholder (gerçek API ile değiştir).
+    
+    Args:
+        symbol: Sembol adı (default: "BTCUSDT")
+    
+    Returns:
+        Sosyal sentiment bilgilerini içeren dictionary
+    """
+    try:
+        await asyncio.sleep(0.05)  # Simüle edilmiş IO işlemi
+        logger.debug(f"Social sentiment placeholder called for {symbol}")
+        return {"sentiment": 0.5, "bullish": 0.6, "bearish": 0.4}  # Varsayılan değerler
+    except Exception as e:
+        logger.error(f"Social sentiment placeholder error: {e}")
+        return {"sentiment": 0.5, "bullish": 0.5, "bearish": 0.5}
+
+@track_performance
+def funding_rate_placeholder(symbol: str = "BTCUSDT") -> float:
+    """
+    Senkron funding rate placeholder (registry kullanım kolaylığı için).
+    
+    Args:
+        symbol: Sembol adı (default: "BTCUSDT")
+    
+    Returns:
+        Funding rate değeri
+    """
+    try:
+        logger.debug(f"Funding rate sync placeholder called for {symbol}")
+        return 0.001  # Varsayılan değer
+    except Exception as e:
+        logger.error(f"Funding rate sync placeholder error: {e}")
+        return 0.001
+
+@track_performance
+def social_sentiment_placeholder(symbol: str = "BTCUSDT") -> Dict[str, float]:
+    """
+    Senkron sosyal sentiment placeholder (registry kullanım kolaylığı için).
+    
+    Args:
+        symbol: Sembol adı (default: "BTCUSDT")
+    
+    Returns:
+        Sosyal sentiment bilgilerini içeren dictionary
+    """
+    try:
+        logger.debug(f"Social sentiment sync placeholder called for {symbol}")
+        return {"sentiment": 0.5, "bullish": 0.6, "bearish": 0.4}  # Varsayılan değerler
+    except Exception as e:
+        logger.error(f"Social sentiment sync placeholder error: {e}")
+        return {"sentiment": 0.5, "bullish": 0.5, "bearish": 0.5}
 
 # =============================================================
-# Trading Pipeline - GELİŞMİŞ HATA YÖNETİMİ
+# Registry - GÜNCELLENMİŞ
+# =============================================================
+
+# CPU-bound olarak toplu hesaplanacak fonksiyonlar
+CPU_FUNCTIONS = {
+    "ema": ema,
+    "macd": macd,
+    "adx": adx,
+    "vwap": vwap,
+    "cci": cci,
+    "momentum": momentum,
+    "rsi": rsi,
+    "stochastic": stochastic,
+    "atr": atr,
+    "bollinger_bands": bollinger_bands,
+    "sharpe_ratio": sharpe_ratio,
+    "max_drawdown": max_drawdown,
+    "historical_volatility": historical_volatility,
+    "ulcer_index": ulcer_index,
+    "obv": obv,
+    "cmf": cmf,
+    "market_structure": market_structure,
+    "breakout": breakout,
+}
+
+# Paralelde çalıştırılırken df'yi mutate eden (yan etki oluşturan) fonksiyonlar
+MUTATING_FUNCTIONS = {"adx"}  # ADX TR, +DM, -DM kolonları ekler
+
+# I/O-bound asenkron fonksiyonlar (gerçek API'lerle değiştirilebilir)
+IO_FUNCTIONS = {
+    "funding_rate": funding_rate_placeholder_async,
+    "social_sentiment": social_sentiment_placeholder_async,
+}
+
+# Genel amaçlı string-çağrı registry (senkron kullanımlar için)
+TA_FUNCTIONS = {
+    **CPU_FUNCTIONS,
+    "order_book_imbalance": order_book_imbalance,
+    "open_interest_placeholder": open_interest_placeholder,
+    "funding_rate_placeholder": funding_rate_placeholder,
+    "social_sentiment_placeholder": social_sentiment_placeholder,
+}
+
+# =============================================================
+# Hibrit Pipeline - GÜNCELLENMİŞ
 # =============================================================
 
 @track_performance
-async def optimized_trading_pipeline(symbol: str = "BTCUSDT", 
-                                   interval: str = "1m",
-                                   callback: Optional[Callable] = None,
-                                   max_retries: int = 3):
+def calculate_cpu_functions(df: pd.DataFrame, max_workers: Optional[int] = None) -> dict:
     """
-    Geliştirilmiş trading pipeline with enhanced error handling and retry.
-    
-    Args:
-        symbol: İşlem yapılacak sembol (default: "BTCUSDT")
-        interval: Zaman aralığı (default: "1m")
-        callback: Sonuçları işleyecek callback fonksiyonu
-        max_retries: Maksimum yeniden deneme sayısı (default: 3)
+    CPU-bound fonksiyonları paralelde hesaplar.
+    - Free Render için default max_workers=2 (CONFIG.SYSTEM.MAX_WORKERS yoksa).
+    - MUTATING_FUNCTIONS için df.copy() ile izole çalıştırır.
     """
-    pipeline_logger = logging.getLogger(f"ta_pipeline.{symbol}")
-    
+    results: dict = {}
+    max_workers = max_workers or _get_max_workers(default=2)
+
+    # Hafıza ve stabilite açısından Free Render'da 2 önerilir.
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {}
+        for name, func in CPU_FUNCTIONS.items():
+            # Yan etki oluşturan fonksiyonlara izolasyon
+            arg_df = df.copy(deep=True) if name in MUTATING_FUNCTIONS else df
+            futures[executor.submit(func, arg_df)] = name
+
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                results[name] = future.result()
+                ta_metrics.total_calculations += 1
+            except Exception as e:
+                results[name] = None
+                ta_metrics.calculation_errors += 1
+                logger.error(f"[CPU TA ERROR] {name} hesaplanamadı: {e}")
+    return results
+
+@track_performance
+async def calculate_io_functions(symbol: str = "default") -> dict:
+    """
+    I/O-bound (asenkron) fonksiyonları birlikte yürütür.
+    """
+    results: dict = {}
+    names = list(IO_FUNCTIONS.keys())
+    tasks = [IO_FUNCTIONS[n](symbol) for n in names]
+    completed = await asyncio.gather(*tasks, return_exceptions=True)
+    for name, res in zip(names, completed):
+        if isinstance(res, Exception):
+            results[name] = None
+            ta_metrics.io_errors += 1
+            logger.error(f"[I/O TA ERROR] {name} hesaplanamadı: {res}")
+        else:
+            results[name] = res
+            ta_metrics.io_requests += 1
+    return results
+
+def _run_asyncio(coro):
+    """
+    Jupyter / Bot / Web server ortamlarında güvenli asyncio çalıştırma.
+    - Çalışan bir loop varsa yeni loop açar.
+    """
     try:
-        from utils.binance_api import get_binance_client
-        client = get_binance_client(None, None)
-    except ImportError as e:
-        pipeline_logger.error(f"Binance API modülü yüklenemedi: {e}")
-        return
-    
-    pipeline_interval = getattr(CONFIG.TA, 'TA_PIPELINE_INTERVAL', 60)
-    min_data_points = getattr(CONFIG.TA, 'TA_MIN_DATA_POINTS', 20)
-    cache_ttl = getattr(CONFIG.TA, 'TA_CACHE_TTL', 300)
-    
-    retry_count = 0
-    retry_delay = 5
-    
-    while True:
-        try:
-            # Cache kontrolü
-            cached_result = ta_cache.get_ta_result(symbol, interval, 'full_analysis')
-            
-            if cached_result:
-                pipeline_logger.debug("Using cached TA results")
-                if callback:
-                    try:
-                        await callback(cached_result)
-                    except Exception as e:
-                        pipeline_logger.error(f"Callback error: {e}")
-                await asyncio.sleep(pipeline_interval)
-                continue
-            
-            # Veri çekme
-            klines = await client.get_klines(symbol, interval, limit=100)
-            if not klines or len(klines) < min_data_points:
-                pipeline_logger.warning(f"Insufficient kline data: {len(klines) if klines else 0} points")
-                await asyncio.sleep(30)
-                continue
-            
-            # DataFrame dönüşümü
-            df = klines_to_dataframe(klines)
-            
-            # DataFrame validation
-            required_columns = ['open', 'high', 'low', 'close', 'volume']
-            if not validate_dataframe(df, required_columns):
-                pipeline_logger.error("Invalid DataFrame format")
-                await asyncio.sleep(30)
-                continue
-            
-            if len(df) < min_data_points:
-                pipeline_logger.warning(f"Insufficient data points: {len(df)} < {min_data_points}")
-                await asyncio.sleep(30)
-                continue
-            
-            # TA hesaplama
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # yeni event loop oluştur ve orada çalıştır
+            new_loop = asyncio.new_event_loop()
             try:
-                ta_results = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: calculate_all_ta_hybrid(df, symbol)
-                )
-            except Exception as e:
-                pipeline_logger.error(f"TA calculation failed: {e}")
-                await asyncio.sleep(30)
-                continue
-            
-            # Sinyal üretme
-            try:
-                signal = generate_signals(df)
-            except Exception as e:
-                pipeline_logger.error(f"Signal generation failed: {e}")
-                signal = {'signal': 0, 'signals': {}, 'total_signal': 0.0, 'alpha_details': {}}
-            
-            # Sonuç paketleme
-            result = {
-                'symbol': symbol,
-                'timestamp': time.time(),
-                'price': float(safe_column_access(df, 'close').iloc[-1]),
-                'signal': signal,
-                'ta_metrics': {k: float(v.iloc[-1]) if hasattr(v, 'iloc') and not v.empty else v 
-                              for k, v in ta_results.items() if v is not None}
-            }
-            
-            # Cache'e kaydetme
-            ta_cache.set_ta_result(symbol, interval, 'full_analysis', result, ttl=cache_ttl)
-            
-            # Callback
-            if callback:
-                try:
-                    await callback(result)
-                except Exception as e:
-                    pipeline_logger.error(f"Callback execution failed: {e}")
-            
-            # Başarılı oldu, retry sıfırla
-            retry_count = 0
-            retry_delay = 5
-            
-            await asyncio.sleep(pipeline_interval)
-            
-        except asyncio.CancelledError:
-            pipeline_logger.info("Trading pipeline cancelled")
-            break
-        except Exception as e:
-            retry_count += 1
-            pipeline_logger.error(f"Trading pipeline error (retry {retry_count}/{max_retries}): {e}")
-            
-            if retry_count >= max_retries:
-                pipeline_logger.error("Max retries exceeded, stopping pipeline")
-                break
-                
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 60)  # Exponential backoff
-
-# =============================================================
-# Gelişmiş Metrikler ve Monitoring
-# =============================================================
-
-def get_detailed_metrics() -> Dict[str, Any]:
-    """Detaylı sistem metriklerini getir"""
-    cache_stats = ta_cache.get_stats()
-    circuit_status = ta_circuit_breaker.get_status()
-    
-    # Ortalama execution time'ları hesapla
-    avg_times = {}
-    for func_name, times in ta_metrics.execution_times.items():
-        if times:
-            avg_times[func_name] = sum(times) / len(times)
-    
-    return {
-        'calculations': {
-            'total': ta_metrics.total_calculations,
-            'errors': ta_metrics.calculation_errors,
-            'error_rate': ta_metrics.calculation_errors / max(ta_metrics.total_calculations, 1),
-            'cache_hits': ta_metrics.cache_hits,
-            'cache_misses': ta_metrics.cache_misses,
-            'cache_hit_ratio': cache_stats['hit_ratio']
-        },
-        'io': {
-            'requests': ta_metrics.io_requests,
-            'errors': ta_metrics.io_errors,
-            'error_rate': ta_metrics.io_errors / max(ta_metrics.io_requests, 1)
-        },
-        'performance': {
-            'average_times': avg_times,
-            'monitored_functions': list(ta_metrics.execution_times.keys())
-        },
-        'cache': cache_stats,
-        'circuit_breaker': circuit_status,
-        'timestamp': time.time(),
-        'status': 'healthy' if (ta_metrics.calculation_errors / max(ta_metrics.total_calculations, 1)) < 0.1 else 'degraded'
-    }
-
-def reset_metrics():
-    """Metrikleri sıfırla"""
-    global ta_metrics
-    ta_metrics = TAMetrics()
-    logger.info("Metrics reset")
-
-# =============================================================
-# Unit Tests
-# =============================================================
-
-def run_unit_tests():
-    """Tüm fonksiyonlar için unit testleri çalıştır"""
-    logger.info("Running unit tests...")
-    
-    # Test verisi
-    test_data = {
-        'open': [100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
-        'high': [105, 106, 107, 108, 109, 110, 111, 112, 113, 114],
-        'low': [95, 96, 97, 98, 99, 100, 101, 102, 103, 104],
-        'close': [102, 103, 104, 105, 106, 107, 108, 109, 110, 111],
-        'volume': [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
-    }
-    df = pd.DataFrame(test_data)
-    
-    # Test fonksiyonları
-    test_functions = [
-        (ema, (df,), {}),
-        (lambda df: macd(df)[0], (df,), {}),  # MACD line only
-        (rsi, (df,), {}),
-        (lambda df: stochastic(df)[0], (df,), {}),  # Stochastic K only
-    ]
-    
-    passed = 0
-    failed = 0
-    
-    for func, args, kwargs in test_functions:
+                asyncio.set_event_loop(new_loop)
+                return new_loop.run_until_complete(coro)
+            finally:
+                new_loop.close()
+                asyncio.set_event_loop(loop)
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        # loop yoksa
+        new_loop = asyncio.new_event_loop()
         try:
-            result = func(*args, **kwargs)
-            # Basit validation
-            if result is not None and not (hasattr(result, 'isna') and result.isna().all()):
-                passed += 1
-                logger.info(f"✓ {func.__name__} test passed")
-            else:
-                failed += 1
-                logger.warning(f"✗ {func.__name__} test failed: Invalid result")
-        except Exception as e:
-            failed += 1
-            logger.error(f"✗ {func.__name__} test failed with error: {e}")
-    
-    logger.info(f"Unit tests completed: {passed} passed, {failed} failed")
-    return passed, failed
+            asyncio.set_event_loop(new_loop)
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+            asyncio.set_event_loop(None)
+
+@track_performance
+def calculate_all_ta_hybrid(df: pd.DataFrame, symbol: str = "default", 
+                          max_workers: Optional[int] = None) -> dict:
+    """
+    Tüm TA'leri hibrit olarak hesaplar:
+      - CPU-bound: ThreadPoolExecutor
+      - I/O-bound: asyncio
+    Dönen sonuç: { indicator_name: value_or_series_or_df }
+    """
+    cpu_results = calculate_cpu_functions(df, max_workers=max_workers)
+    io_results = _run_asyncio(calculate_io_functions(symbol))
+    return {**cpu_results, **io_results}
 
 # =============================================================
+# Advanced Signal Stack: alpha_ta - ESKİ KODDAN AKTARILDI ve GELİŞTİRİLDİ
 # Advanced Signal Stack: alpha_ta - ESKİ KODDAN AKTARILDI
 # =============================================================
 
@@ -1670,5 +1952,6 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
+
 
 
