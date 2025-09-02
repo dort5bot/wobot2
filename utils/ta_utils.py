@@ -376,9 +376,17 @@ def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> 
         return False
     
     # NaN kontrolü - any() kullanarak scalar boolean döndür
-    if df[required_columns].isna().all().any():
-        logger.warning("All values are NaN in some columns")
-        return False
+    # ESKİ: if df[required_columns].isna().all().any():
+    # YENİ:
+    nan_check = df[required_columns].isna().all()
+    if isinstance(nan_check, pd.Series):
+        if nan_check.any():
+            logger.warning("All values are NaN in some columns")
+            return False
+    else:
+        if nan_check:
+            logger.warning("All values are NaN in DataFrame")
+            return False
     
     return True
 
@@ -1643,47 +1651,65 @@ def generate_signals(df: pd.DataFrame, ref_series: Optional[pd.Series] = None) -
     try:
         indicators: Dict[str, float] = {}
 
-        # Trend: EMA
+        # Trend: EMA - scalar değerleri explicit olarak al
         ema_periods = getattr(CONFIG.TA, "EMA_PERIODS", [20, 50])
         ema_fast = ema(df, period=ema_periods[0])
         ema_slow = ema(df, period=ema_periods[1])
         
-        # Series değil, scalar değerler al
-        ema_fast_val = float(ema_fast.iloc[-1]) if not ema_fast.empty else np.nan
-        ema_slow_val = float(ema_slow.iloc[-1]) if not ema_slow.empty else np.nan
+        # Series değil, scalar değerler al (iloc[-1] kullanarak)
+        ema_fast_val = float(ema_fast.iloc[-1]) if not ema_fast.empty and not pd.isna(ema_fast.iloc[-1]) else np.nan
+        ema_slow_val = float(ema_slow.iloc[-1]) if not ema_slow.empty and not pd.isna(ema_slow.iloc[-1]) else np.nan
         
         indicators["ema_fast"] = ema_fast_val
         indicators["ema_slow"] = ema_slow_val
-        ema_signal = 1 if ema_fast_val > ema_slow_val else -1
+        
+        # EMA sinyalini scalar değerlerle hesapla
+        if pd.isna(ema_fast_val) or pd.isna(ema_slow_val):
+            ema_signal = 0
+        else:
+            ema_signal = 1 if ema_fast_val > ema_slow_val else -1
 
         # MACD - scalar değer al
         macd_line, signal_line, _ = macd(df)
-        macd_val = float(macd_line.iloc[-1] - signal_line.iloc[-1]) if not macd_line.empty and not signal_line.empty else 0.0
+        macd_val = 0.0
+        if not macd_line.empty and not signal_line.empty:
+            macd_current = macd_line.iloc[-1] if not pd.isna(macd_line.iloc[-1]) else 0.0
+            signal_current = signal_line.iloc[-1] if not pd.isna(signal_line.iloc[-1]) else 0.0
+            macd_val = float(macd_current - signal_current)
+        
         indicators["macd"] = macd_val
-        macd_signal = 1 if macd_val > 0 else -1
+        macd_signal = 1 if macd_val > 0 else (-1 if macd_val < 0 else 0)
 
         # Momentum: RSI - scalar değer al
         rsi_series = rsi(df)
-        rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
+        rsi_val = 50.0
+        if not rsi_series.empty and not pd.isna(rsi_series.iloc[-1]):
+            rsi_val = float(rsi_series.iloc[-1])
+        
         indicators["rsi"] = rsi_val
         rsi_signal = 1 if rsi_val < 30 else (-1 if rsi_val > 70 else 0)
 
         # Volatilite: ATR - scalar değer al
         atr_series = atr(df)
-        indicators["atr"] = float(atr_series.iloc[-1]) if not atr_series.empty else np.nan
+        atr_val = np.nan
+        if not atr_series.empty and not pd.isna(atr_series.iloc[-1]):
+            atr_val = float(atr_series.iloc[-1])
+        indicators["atr"] = atr_val
 
         # Hacim: OBV - scalar değer al
         obv_series = obv(df)
-        obv_val = float(obv_series.iloc[-1]) if not obv_series.empty else 0.0
+        obv_val = 0.0
+        if not obv_series.empty and not pd.isna(obv_series.iloc[-1]):
+            obv_val = float(obv_series.iloc[-1])
         indicators["obv"] = obv_val
         
         # OBV sinyalini doğru hesapla
-        obv_signal = 1
+        obv_signal = 0
         if len(obv_series) > 20:
-            obv_prev = float(obv_series.iloc[-20]) if not obv_series.empty else 0.0
-            obv_signal = 1 if obv_val > obv_prev else -1
+            obv_prev = float(obv_series.iloc[-20]) if not obv_series.empty and len(obv_series) > 20 and not pd.isna(obv_series.iloc[-20]) else 0.0
+            obv_signal = 1 if obv_val > obv_prev else (-1 if obv_val < obv_prev else 0)
         else:
-            obv_signal = -1
+            obv_signal = 0
 
         weights = {"ema":0.3, "macd":0.3, "rsi":0.2, "obv":0.2}
         score = (ema_signal * weights["ema"] + 
@@ -2211,4 +2237,5 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
+
 
