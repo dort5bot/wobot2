@@ -28,7 +28,7 @@ class BinanceConfig:
     TESTNET_BASE_URL: str = "https://testnet.binancefuture.com"
 
     API_KEY: Optional[str] = os.getenv("BINANCE_API_KEY")
-    SECRET_KEY: Optional[str] = os.getenv("BINANCE_SECRET_KEY")
+    SECRET_KEY: Optional[str] = os.getenv("BINANCE_API_SECRET")
 
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "10"))
     DEFAULT_RETRY_ATTEMPTS: int = int(os.getenv("DEFAULT_RETRY_ATTEMPTS", "3"))
@@ -233,5 +233,6 @@ def reload_config():
     global CONFIG
     get_config.cache_clear()
     CONFIG = get_config()
+
 
 
