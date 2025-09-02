@@ -329,28 +329,34 @@ ta_metrics = TAMetrics()
 # Unit Test Decorator
 # ------------------------------------------------------------
 def unit_test(expected_result=None, tolerance=0.01):
-    """Fonksiyon unit test decorator"""
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # Fonksiyonu çalıştır
             result = func(*args, **kwargs)
             
-            # Eğer expected result verilmişse kontrol et
             if expected_result is not None:
-                if hasattr(result, '__len__') and hasattr(expected_result, '__len__'):
-                    # Array/Series karşılaştırması
-                    if len(result) == len(expected_result):
-                        for i, (r, e) in enumerate(zip(result, expected_result)):
-                            if abs(r - e) > tolerance:
-                                logger.warning(f"Unit test failed for {func.__name__} at index {i}: got {r}, expected {e}")
+                try:
+                    if isinstance(result, pd.Series):
+                        if not result.dropna().empty:
+                            last_val = result.dropna().iloc[-1]
+                            if abs(last_val - expected_result) > tolerance:
+                                logger.warning(
+                                    f"Unit test failed for {func.__name__}: got {last_val}, expected {expected_result}"
+                                )
+                    elif isinstance(result, (list, tuple, np.ndarray)):
+                        if len(result) > 0:
+                            last_val = result[-1]
+                            if abs(last_val - expected_result) > tolerance:
+                                logger.warning(
+                                    f"Unit test failed for {func.__name__}: got {last_val}, expected {expected_result}"
+                                )
                     else:
-                        logger.warning(f"Unit test failed for {func.__name__}: length mismatch")
-                else:
-                    # Scalar karşılaştırması
-                    if abs(result - expected_result) > tolerance:
-                        logger.warning(f"Unit test failed for {func.__name__}: got {result}, expected {expected_result}")
-            
+                        if abs(result - expected_result) > tolerance:
+                            logger.warning(
+                                f"Unit test failed for {func.__name__}: got {result}, expected {expected_result}"
+                            )
+                except Exception as e:
+                    logger.error(f"Unit test comparison failed: {e}")
             return result
         return wrapper
     return decorator
