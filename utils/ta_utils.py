@@ -375,18 +375,21 @@ def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> 
         logger.warning(f"DataFrame missing required columns: {missing_columns}")
         return False
     
-    # NaN kontrolü - any() kullanarak scalar boolean döndür
-    # ESKİ: if df[required_columns].isna().all().any():
-    # YENİ:
-    nan_check = df[required_columns].isna().all()
-    if isinstance(nan_check, pd.Series):
-        if nan_check.any():
-            logger.warning("All values are NaN in some columns")
-            return False
-    else:
-        if nan_check:
-            logger.warning("All values are NaN in DataFrame")
-            return False
+    # NaN kontrolü - DÜZELTİLMİŞ VERSİYON
+    # df[required_columns].isna().all() bir Series döndürür, bu yüzden .any() kullanmalıyız
+    try:
+        nan_check = df[required_columns].isna().all()
+        if hasattr(nan_check, 'any'):  # Bu bir Series ise
+            if nan_check.any():  # Herhangi bir sütunda tüm değerler NaN mı?
+                logger.warning("All values are NaN in some columns")
+                return False
+        else:  # Bu bir scalar boolean ise
+            if nan_check:
+                logger.warning("All values are NaN in DataFrame")
+                return False
+    except Exception as e:
+        logger.warning(f"NaN check failed: {e}")
+        return False
     
     return True
 
@@ -439,29 +442,17 @@ def normalize_symbol(symbol: str) -> str:
 # Trend İndikatörleri - TAMAMEN GÜNCELLENMİŞ
 # =============================================================
 
-@track_performance
-@unit_test(expected_result=104.5, tolerance=0.1)
-def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
-    """
-    Exponential Moving Average (EMA) hesaplar.
-    
-    Args:
-        df: OHLCV verilerini içeren DataFrame
-        period: EMA periyodu (default: CONFIG.TA.EMA_PERIOD veya 20)
-        column: Hesaplanacak sütun (default: "close")
-    
-    Returns:
-        EMA değerlerini içeren pandas Series
-    """
+
     try:
-        if not validate_dataframe(df, [column]):
-            return pd.Series([np.nan] * len(df), index=df.index)
+        # Daha güvenli validation kontrolü
+        if df is None or df.empty or column not in df.columns:
+            return pd.Series([np.nan] * len(df), index=df.index if df is not None else [])
         
         period = period or getattr(CONFIG.TA, 'EMA_PERIOD', 20)
-        price_series = safe_column_access(df, column)
+        price_series = df[column]
         
-        if len(price_series) < period:
-            logger.warning(f"EMA: Not enough data points ({len(price_series)} < {period})")
+        if len(price_series) < period or price_series.isna().all():
+            logger.warning(f"EMA: Not enough valid data points ({len(price_series)} < {period} or all NaN)")
             return pd.Series([np.nan] * len(df), index=df.index)
         
         return ta_circuit_breaker.execute(
@@ -469,7 +460,7 @@ def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -
         )
     except Exception as e:
         logger.error(f"EMA hesaplanırken hata: {e}")
-        return pd.Series([np.nan] * len(df), index=df.index)
+        return pd.Series([np.nan] * len(df), index=df.index if df is not None else [])
 
 @track_performance
 def macd(df: pd.DataFrame, fast: Optional[int] = None, slow: Optional[int] = None, 
@@ -2237,5 +2228,6 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
+
 
 
