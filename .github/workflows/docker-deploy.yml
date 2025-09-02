@@ -1,5 +1,5 @@
-# 🟥3🟥🟥.github/workflows/docker-deploy.yml
-# 🚀 Docker Build & Deploy (Render / Railway / Oracle VPS Auto Detect)
+# 🟥3🟥-- 🟥.github/workflows/docker-deploy.yml
+# Docker Build & Deploy (Render / Railway / Oracle VPS Auto Detect)
 # Secrets: GHCR_PAT, RENDER_DEPLOY_HOOK?, RAILWAY_DEPLOY_HOOK?, ORACLE_*?
 # 	Secret Adı	            Açıklama
 # 	GHCR_PAT	            GitHub Container Registry için token (write:packages)
