@@ -437,7 +437,20 @@ def normalize_symbol(symbol: str) -> str:
 # =============================================================
 # Trend İndikatörleri - TAMAMEN GÜNCELLENMİŞ
 # =============================================================
-
+@track_performance
+@unit_test(expected_result=104.5, tolerance=0.1)
+def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
+    """
+    Exponential Moving Average (EMA) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: EMA periyodu (default: CONFIG.TA.EMA_PERIOD veya 20)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        EMA değerlerini içeren pandas Series
+    """
 
     try:
         # Daha güvenli validation kontrolü
