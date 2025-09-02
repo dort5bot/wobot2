@@ -496,18 +496,236 @@ def macd(df: pd.DataFrame, fast: Optional[int] = None, slow: Optional[int] = Non
             nan_series = pd.Series([np.nan] * len(df), index=df.index)
             return nan_series, nan_series, nan_series
 
-        return ta_circuit_breaker.execute(lambda: (
-            price_series.ewm(span=fast, adjust=False).mean() - 
-            price_series.ewm(span=slow, adjust=False).mean(),
-            price_series.ewm(span=fast, adjust=False).mean() - 
-            price_series.ewm(span=slow, adjust=False).mean(),
-            price_series.ewm(span=fast, adjust=False).mean() - 
-            price_series.ewm(span=slow, adjust=False).mean()
-        ))
+        ema_fast = price_series.ewm(span=fast, adjust=False).mean()
+        ema_slow = price_series.ewm(span=slow, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        histogram = macd_line - signal_line
+
+        return ta_circuit_breaker.execute(lambda: (macd_line, signal_line, histogram))
     except Exception as e:
         logger.error(f"MACD hesaplanırken hata: {e}")
         nan_series = pd.Series([np.nan] * len(df), index=df.index)
         return nan_series, nan_series, nan_series
+
+@track_performance
+def adx(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
+    """
+    Average Directional Index (ADX) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: ADX periyodu (default: CONFIG.TA.ADX_PERIOD veya 14)
+    
+    Returns:
+        ADX değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        period = period or getattr(CONFIG.TA, 'ADX_PERIOD', 14)
+        
+        # TR, +DM, -DM hesaplama
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        close = safe_column_access(df, 'close')
+        
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        up_move = high - high.shift(1)
+        down_move = low.shift(1) - low
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+        
+        # Wilder's smoothing
+        def wilder_smoothing(series, period):
+            return series.ewm(alpha=1/period, adjust=False).mean()
+        
+        tr_smooth = wilder_smoothing(tr, period)
+        plus_di = 100 * wilder_smoothing(plus_dm, period) / tr_smooth
+        minus_di = 100 * wilder_smoothing(minus_dm, period) / tr_smooth
+        
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-12)
+        adx_val = wilder_smoothing(dx, period)
+        
+        return ta_circuit_breaker.execute(lambda: adx_val)
+    except Exception as e:
+        logger.error(f"ADX hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def vwap(df: pd.DataFrame) -> pd.Series:
+    """
+    Volume Weighted Average Price (VWAP) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+    
+    Returns:
+        VWAP değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        close = safe_column_access(df, 'close')
+        volume = safe_column_access(df, 'volume')
+        
+        typical_price = (high + low + close) / 3
+        cumulative_tp_volume = (typical_price * volume).cumsum()
+        cumulative_volume = volume.cumsum()
+        
+        return ta_circuit_breaker.execute(lambda: cumulative_tp_volume / cumulative_volume)
+    except Exception as e:
+        logger.error(f"VWAP hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def cci(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """
+    Commodity Channel Index (CCI) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: CCI periyodu (default: 20)
+    
+    Returns:
+        CCI değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        close = safe_column_access(df, 'close')
+        
+        tp = (high + low + close) / 3
+        sma = tp.rolling(window=period).mean()
+        mad = tp.rolling(window=period).apply(lambda x: np.mean(np.abs(x - np.mean(x))), raw=True)
+        
+        return ta_circuit_breaker.execute(lambda: (tp - sma) / (0.015 * mad + 1e-12))
+    except Exception as e:
+        logger.error(f"CCI hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def momentum(df: pd.DataFrame, period: int = 10, column: str = "close") -> pd.Series:
+    """
+    Momentum Oscillator hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: Momentum periyodu (default: 10)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        Momentum değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        price_series = safe_column_access(df, column)
+        
+        return ta_circuit_breaker.execute(lambda: price_series / price_series.shift(period) * 100)
+    except Exception as e:
+        logger.error(f"Momentum hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+# =============================================================
+# Momentum İndikatörleri - TAMAMEN GÜNCELLENMİŞ
+# =============================================================
+
+@track_performance
+def rsi(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
+    """
+    Relative Strength Index (RSI) hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        period: RSI periyodu (default: CONFIG.TA.RSI_PERIOD veya 14)
+        column: Hesaplanacak sütun (default: "close")
+    
+    Returns:
+        RSI değerlerini içeren pandas Series
+    """
+    try:
+        if not validate_dataframe(df, [column]):
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        period = period or getattr(CONFIG.TA, 'RSI_PERIOD', 14)
+        price_series = safe_column_access(df, column)
+        
+        if len(price_series) < period + 1:
+            logger.warning(f"RSI: Not enough data points ({len(price_series)} < {period + 1})")
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        delta = price_series.diff()
+        gain = np.where(delta > 0, delta, 0)
+        loss = np.where(delta < 0, -delta, 0)
+        
+        avg_gain = pd.Series(gain).rolling(window=period).mean()
+        avg_loss = pd.Series(loss).rolling(window=period).mean()
+        
+        rs = avg_gain / (avg_loss + 1e-12)
+        
+        return ta_circuit_breaker.execute(lambda: 100 - (100 / (1 + rs)))
+    except Exception as e:
+        logger.error(f"RSI hesaplanırken hata: {e}")
+        return pd.Series([np.nan] * len(df), index=df.index)
+
+@track_performance
+def stochastic(df: pd.DataFrame, k_period: Optional[int] = None, d_period: Optional[int] = None) -> Tuple[pd.Series, pd.Series]:
+    """
+    Stochastic Oscillator hesaplar.
+    
+    Args:
+        df: OHLCV verilerini içeren DataFrame
+        k_period: %K periyodu (default: CONFIG.TA.STOCH_K veya 14)
+        d_period: %D periyodu (default: CONFIG.TA.STOCH_D veya 3)
+    
+    Returns:
+        (%K, %D) tuple'ı
+    """
+    try:
+        if not validate_dataframe(df):
+            nan_series = pd.Series([np.nan] * len(df), index=df.index)
+            return nan_series, nan_series
+
+        k_period = k_period or getattr(CONFIG.TA, 'STOCH_K', 14)
+        d_period = d_period or getattr(CONFIG.TA, 'STOCH_D', 3)
+        
+        high = safe_column_access(df, 'high')
+        low = safe_column_access(df, 'low')
+        close = safe_column_access(df, 'close')
+        
+        if len(close) < k_period:
+            logger.warning(f"Stochastic: Not enough data points ({len(close)} < {k_period})")
+            nan_series = pd.Series([np.nan] * len(df), index=df.index)
+            return nan_series, nan_series
+        
+        lowest_low = low.rolling(window=k_period).min()
+        highest_high = high.rolling(window=k_period).max()
+        
+        k = 100 * (close - lowest_low) / (highest_high - lowest_low + 1e-12)
+        d = k.rolling(window=d_period).mean()
+        
+        return ta_circuit_breaker.execute(lambda: (k, d))
+    except Exception as e:
+        logger.error(f"Stochastic hesaplanırken hata: {e}")
+        nan_series = pd.Series([np.nan] * len(df), index=df.index)
+        return nan_series, nan_series
+
+# =============================================================
+# Volatilite
 
 # Diğer TA fonksiyonları (RSI, Stochastic, ATR, Bollinger Bands, vs.) benzer şekilde güncellenmeli
 # Kısaltma için burada gösterilmiyor, ancak aynı pattern ile implemente edilmeli
@@ -1452,4 +1670,5 @@ if __name__ == "__main__":
     exit(0 if success else 1)
 
 # EOF
+
 
