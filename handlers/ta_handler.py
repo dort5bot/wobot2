@@ -53,15 +53,14 @@ async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.D
         # Timeframe mapping
         timeframe = map_interval_to_timeframe(interval)
         
-        # Timestamp hesapla
-        since = None
-        if hours > 0:
-            since = int((time.time() - hours * 3600) * 1000)
+        # Limit hesapla - CCXT since parametresi için
+        limit = min(200, hours * 12)  # Yaklaşık limit hesapla
         
         # CCXT ile OHLCV verisi al
-        ohlcv = await client.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=200)
+        ohlcv = await client.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
         
         if not ohlcv or len(ohlcv) == 0:
+            logger.warning(f"{symbol} için OHLCV verisi alınamadı")
             return pd.DataFrame()
         
         # CCXT formatını DataFrame'e dönüştür
@@ -74,6 +73,7 @@ async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.D
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
             
+        logger.info(f"{symbol} için {len(df)} veri noktası alındı")
         return df
         
     except Exception as e:
@@ -237,11 +237,16 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
 
     async def _run():
         try:
-            # 1. Tek Coin Analizi: /t <coin_ismi> [saat]
-            if args and len(args) >= 1 and not args[0].isdigit() and args[0].lower() not in ['status', 's', 'market', 'm', 'trend', 't', 'tt', 'crash', 'c', 'range', 'r', 'all']:
-                coin = args[0].upper()
-                if not coin.endswith("USDT"):
-                    coin += "USDT"
+            logger.info(f"TA handler çağrıldı. Args: {args}")
+        
+        # 1. Tek Coin Analizi
+        if args and len(args) >= 1 and not args[0].isdigit() and args[0].lower() not in ['status', 's', 'market', 'm', 'trend', 't', 'tt', 'crash', 'c', 'range', 'r', 'all']:
+            coin = args[0].upper()
+            if not coin.endswith("USDT"):
+                coin += "USDT"
+            
+            logger.info(f"Tek coin analizi: {coin}")
+            # ... mevcut kod
                 
                 hours = int(args[1]) if len(args) > 1 and args[1].isdigit() else 4
                 
@@ -282,8 +287,13 @@ def ta_handler(update: Update, context: CallbackContext) -> None:
                 else:
                     symbols = CONFIG.BINANCE.SCAN_SYMBOLS
                 
+                # scan_market çağrısını düzelt
                 results = await scan_market(symbols=symbols, interval="1h", hours=hours)
+                logger.info(f"Market tarama tamamlandı. {len(results)} sonuç bulundu")
                 
+                if not results:
+                    await context.bot.send_message(chat_id=chat_id, text="⚠️ Hiç veri alınamadı. API erişimini kontrol edin.")
+                    return
                 # Sinyal gücüne göre sırala
                 limit = 15
                 sorted_coins = sorted(
