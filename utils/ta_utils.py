@@ -1140,18 +1140,19 @@ def klines_to_dataframe(ohlcv: list) -> pd.DataFrame:
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         # Sayısal kolonları dönüştür
-	numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume']
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
         
-         # Timestamp'i datetime'a çevir
-	df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        # Timestamp'i datetime'a çevir
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         
         return df
     except Exception as e:
         logger.error(f"OHLCV to DataFrame dönüşümünde hata: {e}")
         return pd.DataFrame()
+
 
 def get_ta_function(name: str) -> Optional[Callable]:
     """İsimle TA fonksiyonu döndürür."""
@@ -1272,6 +1273,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # EOF
+
 
 
 
