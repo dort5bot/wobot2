@@ -576,10 +576,20 @@ class BinanceWebSocketManager:
 def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
     """Kline verisini pandas DataFrame'e dönüştür - CCXT uyumlu"""
     try:
-        # CCXT formatı: [timestamp, open, high, low, close, volume]
+        # Binance kline formatı: 
+        # [timestamp, open, high, low, close, volume, 
+        #  close_time, quote_asset_volume, number_of_trades, 
+        #  taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore]
+        
+        # Sadece ihtiyacımız olan sütunları al
         df = pd.DataFrame(klines, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume'
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades',
+            'taker_buy_base_volume', 'taker_buy_quote_volume', 'ignore'
         ])
+        
+        # Sadece ihtiyacımız olan sütunları seç
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
         
         # Sayısal kolonları dönüştür
         numeric_cols = ['open', 'high', 'low', 'close', 'volume']
@@ -976,6 +986,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
     return binance_client
 
 # EOF
+
 
 
 
