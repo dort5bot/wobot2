@@ -376,19 +376,23 @@ def validate_dataframe(df: pd.DataFrame, required_columns: List[str] = None) -> 
         return False
     
     try:
+        # NaN kontrolünü düzelt - Series yerine scalar boolean döndür
         nan_check = df[required_columns].isna().all()
+        
+        # Pandas Series için doğru boolean kontrolü
         if isinstance(nan_check, pd.Series):
-            if nan_check.any():
+            if nan_check.any():  # Herhangi bir sütunda tüm değerler NaN mi?
                 logger.warning("All values are NaN in some columns")
                 return False
-        elif bool(nan_check):
+        elif bool(nan_check):  # Scalar değer için
             logger.warning("All values are NaN in DataFrame")
             return False
+            
+        return True
     except Exception as e:
         logger.warning(f"NaN check failed: {e}")
         return False
-    
-    return True
+        
 def safe_column_access(df: pd.DataFrame, column: str, default_value: Any = np.nan, 
                       log_warning: bool = True) -> pd.Series:
     """Güvenli sütun erişimi sağlar"""
@@ -440,33 +444,28 @@ def normalize_symbol(symbol: str) -> str:
 @track_performance
 @unit_test(expected_result=104.5, tolerance=0.1)
 def ema(df: pd.DataFrame, period: Optional[int] = None, column: str = "close") -> pd.Series:
-    """
-    Exponential Moving Average (EMA) hesaplar.
-    
-    Args:
-        df: OHLCV verilerini içeren DataFrame
-        period: EMA periyodu (default: CONFIG.TA.EMA_PERIOD veya 20)
-        column: Hesaplanacak sütun (default: "close")
-    
-    Returns:
-        EMA değerlerini içeren pandas Series
-    """
-
+    """Exponential Moving Average hesaplar."""
     try:
         # Daha güvenli validation kontrolü
-        if df is None or df.empty or column not in df.columns:
-            return pd.Series([np.nan] * len(df), index=df.index if df is not None else [])
+        if df is None or df.empty:
+            return pd.Series([np.nan], index=[pd.Timestamp.now()])
         
-        period = period or getattr(CONFIG.TA, 'EMA_PERIOD', 20)
-        price_series = df[column]
-        
-        if len(price_series) < period or price_series.isna().all():
-            logger.warning(f"EMA: Not enough valid data points ({len(price_series)} < {period} or all NaN)")
+        if column not in df.columns:
+            logger.warning(f"Column {column} not found in DataFrame")
             return pd.Series([np.nan] * len(df), index=df.index)
         
-        return ta_circuit_breaker.execute(
-            lambda: price_series.ewm(span=period, adjust=False).mean()
-        )
+        period = period or getattr(CONFIG.TA, 'EMA_PERIOD', 20)
+        price_series = df[column].dropna()  # NaN değerleri temizle
+        
+        if len(price_series) < period:
+            logger.warning(f"EMA: Not enough valid data points ({len(price_series)} < {period})")
+            return pd.Series([np.nan] * len(df), index=df.index)
+        
+        result = price_series.ewm(span=period, adjust=False).mean()
+        
+        # Orijinal index ile uyumlu hale getir
+        return result.reindex(df.index, fill_value=np.nan)
+        
     except Exception as e:
         logger.error(f"EMA hesaplanırken hata: {e}")
         return pd.Series([np.nan] * len(df), index=df.index if df is not None else [])
