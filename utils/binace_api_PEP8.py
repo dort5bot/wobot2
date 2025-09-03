@@ -816,3 +816,479 @@ def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
 # -------------------------------------------------------------
 # BinanceClient Wrapper - YENİ MİMARİ
 # -------------------------------------------------------------
+class BinanceClient:
+    """Binance API'sine erişim için ana istemci sınıfı."""
+    
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None) -> None:
+        """BinanceClient sınıfını başlat.
+        
+        Args:
+            api_key: Binance API anahtarı (opsiyonel)
+            secret_key: Binance gizli anahtarı (opsiyonel)
+        """
+        # 🔹 user_id parametresi TAMAMEN KALDIRILDI
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.http = BinanceHTTPClient(self.api_key, self.secret_key)
+        self.ws_manager = BinanceWebSocketManager()
+
+        # Event loop handling iyileştirme
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = None  # library seviyesinde event loop oluşturma yok
+            
+        LOG.info("BinanceClient initialized successfully")
+
+    def test_connection(self) -> bool:
+        """Bağlantıyı test et.
+        
+        Returns:
+            bool: Bağlantı testi sonucu (her zaman True)
+        """
+        has_keys = bool(self.api_key and self.secret_key)
+        LOG.info(f"Binance client initialized, has_keys: {has_keys}")
+        return True
+
+    # ---------------------------------------------------------
+    # ✅ PUBLIC (API key gerekmez)
+    # ---------------------------------------------------------
+    async def get_server_time(self) -> Dict[str, Any]:
+        """Sunucu zamanını getir.
+        
+        Returns:
+            Dict[str, Any]: Sunucu zamanı bilgisi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await self.http.get_server_time()
+        except Exception as e:
+            LOG.error(f"Error getting server time: {e}")
+            raise
+
+    async def get_exchange_info(self) -> Dict[str, Any]:
+        """Exchange bilgilerini getir.
+        
+        Returns:
+            Dict[str, Any]: Exchange bilgileri
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await self.http.get_exchange_info()
+        except Exception as e:
+            LOG.error(f"Error getting exchange info: {e}")
+            raise
+
+    async def get_symbol_price(self, symbol: str) -> Dict[str, Any]:
+        """Sembol fiyatını getir.
+        
+        Args:
+            symbol: Sembol adı (ör: BTCUSDT)
+            
+        Returns:
+            Dict[str, Any]: Fiyat bilgisi içeren sözlük
+            
+        Raises:
+            ValueError: Geçersiz sembol adı
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            symbol = symbol.upper().strip()
+            if not symbol:
+                raise ValueError("Symbol cannot be empty")
+                
+            return await self.http.get_symbol_price(symbol)
+        except Exception as e:
+            LOG.error(f"Error getting symbol price for {symbol}: {e}")
+            raise
+
+    async def get_order_book(self, symbol: str, limit: int = 100) -> Dict[str, Any]:
+        """Order book verisini getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            limit: Gösterilecek order sayısı (varsayılan: 100)
+            
+        Returns:
+            Dict[str, Any]: Order book verisi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/depth",
+                {"symbol": symbol.upper(), "limit": limit}
+            )
+        except Exception as e:
+            LOG.error(f"Error getting order book for {symbol}: {e}")
+            raise
+
+    async def get_recent_trades(self, symbol: str, limit: int = 500) -> List[Dict[str, Any]]:
+        """Son trade'leri getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            limit: Gösterilecek trade sayısı (varsayılan: 500)
+            
+        Returns:
+            List[Dict[str, Any]]: Son trade'lerin listesi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/trades",
+                {"symbol": symbol.upper(), "limit": limit}
+            )
+        except Exception as e:
+            LOG.error(f"Error getting recent trades for {symbol}: {e}")
+            raise
+
+    async def get_agg_trades(self, symbol: str, limit: int = 500) -> List[Dict[str, Any]]:
+        """Aggregate trade'leri getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            limit: Gösterilecek trade sayısı (varsayılan: 500)
+            
+        Returns:
+            List[Dict[str, Any]]: Aggregate trade'lerin listesi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/aggTrades",
+                {"symbol": symbol.upper(), "limit": limit}
+            )
+        except Exception as e:
+            LOG.error(f"Error getting agg trades for {symbol}: {e}")
+            raise
+
+    async def get_klines(self, symbol: str, interval: str = "1m", limit: int = 500) -> List[List[Union[str, float, int]]]:
+        """Kline verisini getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            interval: Kline aralığı (varsayılan: "1m")
+            limit: Gösterilecek kline sayısı (varsayılan: 500)
+            
+        Returns:
+            List[List[Union[str, float, int]]]: Kline verisi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/klines",
+                {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+            )
+        except Exception as e:
+            LOG.error(f"Error getting klines for {symbol}: {e}")
+            raise
+
+    async def get_klines_dataframe(self, symbol: str, interval: str = "1m", limit: int = 500) -> pd.DataFrame:
+        """Kline verisini DataFrame olarak getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            interval: Kline aralığı (varsayılan: "1m")
+            limit: Gösterilecek kline sayısı (varsayılan: 500)
+            
+        Returns:
+            pd.DataFrame: Kline verisi DataFrame formatında
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            klines = await self.get_klines(symbol, interval, limit)
+            return klines_to_dataframe(klines)
+        except Exception as e:
+            LOG.error(f"Error getting klines dataframe for {symbol}: {e}")
+            raise
+
+    async def get_24h_ticker(self, symbol: str) -> Dict[str, Any]:
+        """24 saatlik ticker verisini getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            
+        Returns:
+            Dict[str, Any]: 24 saatlik ticker verisi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/ticker/24hr",
+                {"symbol": symbol.upper()}
+            )
+        except Exception as e:
+            LOG.error(f"Error getting 24h ticker for {symbol}: {e}")
+            raise
+
+    async def get_all_24h_tickers(self) -> List[Dict[str, Any]]:
+        """Tüm sembollerin 24 saatlik ticker verisini getir.
+        
+        Returns:
+            List[Dict[str, Any]]: Tüm sembollerin 24 saatlik ticker verisi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/ticker/24hr"
+            )
+        except Exception as e:
+            LOG.error(f"Error getting all 24h tickers: {e}")
+            raise
+
+    async def get_all_tickers(self) -> Dict[str, Any]:
+        """Tüm sembollerin anlık fiyatlarını getir.
+        
+        Returns:
+            Dict[str, Any]: Tüm sembollerin anlık fiyatları
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/ticker/price"
+            )
+        except Exception as e:
+            LOG.error(f"Error getting all tickers: {e}")
+            raise
+
+    async def get_historical_trades(self, symbol: str, from_id: Optional[int] = None, limit: int = 500) -> List[Dict[str, Any]]:
+        """Geçmiş trade verilerini getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            from_id: Başlangıç trade ID'si (opsiyonel)
+            limit: Gösterilecek trade sayısı (varsayılan: 500)
+            
+        Returns:
+            List[Dict[str, Any]]: Geçmiş trade verileri
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            params = {"symbol": symbol.upper(), "limit": limit}
+            if from_id:
+                params["fromId"] = from_id
+                
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/historicalTrades", params=params
+            )
+        except Exception as e:
+            LOG.error(f"Error getting historical trades for {symbol}: {e}")
+            raise
+
+    async def get_all_symbols(self) -> List[str]:
+        """Tüm sembol listesini getir.
+        
+        Returns:
+            List[str]: Tüm sembol listesi
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            data = await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/exchangeInfo"
+            )
+            return [s["symbol"] for s in data["symbols"]]
+        except Exception as e:
+            LOG.error(f"Error getting all symbols: {e}")
+            raise
+
+    async def exchange_info_details(self) -> Dict[str, Any]:
+        """Detaylı exchange bilgilerini getir.
+        
+        Returns:
+            Dict[str, Any]: Detaylı exchange bilgileri
+            
+        Raises:
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/exchangeInfo"
+            )
+        except Exception as e:
+            LOG.error(f"Error getting exchange info details: {e}")
+            raise
+
+    # ---------------------------------------------------------
+    # ✅ PRIVATE (API key + secret zorunlu)
+    # ---------------------------------------------------------
+    async def _require_keys(self) -> None:
+        """API key kontrolü yap.
+        
+        Raises:
+            ValueError: API key veya secret key eksikse
+        """
+        if not self.http.api_key or not self.http.secret_key:
+            raise ValueError("Bu endpoint için API key + secret gerekli")
+
+    async def get_account_info(self) -> Dict[str, Any]:
+        """Hesap bilgilerini getir.
+        
+        Returns:
+            Dict[str, Any]: Hesap bilgileri
+            
+        Raises:
+            ValueError: API key veya secret key eksikse
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            await self._require_keys()
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/account", signed=True
+            )
+        except Exception as e:
+            LOG.error(f"Error getting account info: {e}")
+            raise
+
+    async def get_account_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
+        """Hesap bakiyesini getir.
+        
+        Args:
+            asset: Belirli bir asset için bakiye (opsiyonel)
+            
+        Returns:
+            Dict[str, Any]: Hesap bakiyesi bilgileri
+            
+        Raises:
+            ValueError: API key veya secret key eksikse
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            await self._require_keys()
+            account_info = await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/api/v3/account", {}, True
+            )
+
+            if asset:
+                asset = asset.upper()
+                for balance in account_info.get('balances', []):
+                    if balance.get('asset') == asset:
+                        return balance
+                return {}
+
+            return account_info
+
+        except Exception as e:
+            LOG.error(f"Error getting account balance: {e}")
+            raise
+
+    async def create_listen_key(self) -> str:
+        """Private websocket için listenKey oluşturur.
+        
+        Returns:
+            str: Listen key değeri
+            
+        Raises:
+            ValueError: API key veya secret key eksikse
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            await self._require_keys()
+            res = await self.http._request(
+                "POST", "/api/v3/userDataStream", signed=False
+            )
+            return res.get("listenKey")
+        except Exception as e:
+            LOG.error(f"Error creating listenKey: {e}")
+            raise
+
+    async def place_order(self, symbol: str, side: str, type_: str,
+                          quantity: float, price: Optional[float] = None) -> Dict[str, Any]:
+        """Yeni order oluştur.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            side: Order yönü (BUY/SELL)
+            type_: Order tipi (LIMIT, MARKET, vb.)
+            quantity: Order miktarı
+            price: Order fiyatı (opsiyonel)
+            
+        Returns:
+            Dict[str, Any]: Order bilgileri
+            
+        Raises:
+            ValueError: API key veya secret key eksikse
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            await self._require_keys()
+            params = {"symbol": symbol.upper(), "side": side, "type": type_, "quantity": quantity}
+            if price:
+                params["price"] = price
+            return await binance_circuit_breaker.execute(
+                self.http._request, "POST", "/api/v3/order", params=params, signed=True
+            )
+        except Exception as e:
+            LOG.error(f"Error placing order for {symbol}: {e}")
+            raise
+
+    async def futures_position_info(self) -> List[Dict[str, Any]]:
+        """Futures pozisyon bilgilerini getir.
+        
+        Returns:
+            List[Dict[str, Any]]: Futures pozisyon bilgileri
+            
+        Raises:
+            ValueError: API key veya secret key eksikse
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            await self._require_keys()
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/fapi/v2/positionRisk", signed=True, futures=True
+            )
+        except Exception as e:
+            LOG.error(f"Error getting futures position info: {e}")
+            raise
+
+    async def get_funding_rate(self, symbol: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """Funding rate bilgilerini getir.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            limit: Gösterilecek funding rate sayısı (varsayılan: 1)
+            
+        Returns:
+            List[Dict[str, Any]]: Funding rate bilgileri
+            
+        Raises:
+            ValueError: API key veya secret key eksikse
+            Exception: API çağrısı başarısız olursa
+        """
+        try:
+            await self._require_keys()
+            params = {"symbol": symbol.upper(), "limit": limit}
+            return await binance_circuit_breaker.execute(
+                self.http._request, "GET", "/fapi/v1/fundingRate", params=params, futures=True
+            )
+        except Exception as e:
+            LOG.error(f"Error getting funding rate for {symbol}: {e}")
+            raise
+
+    # -----------
+    # --- WebSocket Methods ---
+    # -----------
+    
