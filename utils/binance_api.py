@@ -28,6 +28,8 @@ import hmac
 import hashlib
 import json
 import asyncio
+import aiohttp
+import backoff  # exponential backoff için
 import logging
 import random
 import httpx
@@ -37,6 +39,8 @@ from typing import Any, Dict, List, Optional, Tuple, Callable, Union, Set
 from aiolimiter import AsyncLimiter
 from urllib.parse import urlencode
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal
 from collections import defaultdict
 from enum import Enum
 import ccxt.async_support as ccxt
