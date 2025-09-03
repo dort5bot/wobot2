@@ -295,3 +295,281 @@ binance_circuit_breaker = CircuitBreaker(
 # -------------------------------------------------------------
 # HTTP Katmanı: Retry + Exponential Backoff + TTL Cache
 # -------------------------------------------------------------
+class BinanceHTTPClient:
+    """Binance HTTP API istemcisi için gelişmiş yönetim sınıfı."""
+    
+    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None) -> None:
+        """BinanceHTTPClient sınıfını başlat.
+        
+        Args:
+            api_key: Binance API anahtarı (opsiyonel)
+            secret_key: Binance gizli anahtarı (opsiyonel)
+        """
+        # 🔹 API key/secret
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self._last_request = 0
+
+        # 🔹 aiolimiter: config üzerinden ayarlanabilir
+        self.limiter = AsyncLimiter(
+            CONFIG.BINANCE.LIMITER_RATE,
+            CONFIG.BINANCE.LIMITER_PERIOD
+        )
+
+        LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
+
+        # 🔹 HTTP client configuration
+        self.client = httpx.AsyncClient(
+            base_url=CONFIG.BINANCE.BASE_URL,
+            timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
+            limits=httpx.Limits(
+                max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
+                max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
+                keepalive_expiry=300
+            ),
+            http2=True,
+            verify=True,
+            cert=os.getenv("SSL_CERT_PATH")
+        )
+
+        # 🔹 Concurrency control with priority support
+        self.semaphores = {
+            RequestPriority.HIGH: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY),
+            RequestPriority.NORMAL: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY),
+            RequestPriority.LOW: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY // 2),
+        }
+
+        # 🔹 Cache system
+        self._cache: Dict[str, Tuple[float, Any]] = {}
+        self._last_cache_cleanup = time.time()
+
+        # 🔹 Rate limiting timing
+        self.last_request_time = 0
+        self.min_request_interval = 1.0 / CONFIG.BINANCE.MAX_REQUESTS_PER_SECOND
+
+        # 🔹 Metrics
+        self.metrics = RequestMetrics()
+        self.request_times: List[float] = []
+
+    def _cleanup_cache(self) -> None:
+        """Süresi dolmuş önbellek girdilerini temizle - daha verimli versiyon."""
+        current_time = time.time()
+        # Sık temizlemeyi önle
+        if current_time - self._last_cache_cleanup < CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
+            return
+
+        # Expired anahtarları topla
+        expired_keys = [key for key, (ts, _) in self._cache.items()
+                        if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL]
+
+        for key in expired_keys:
+            del self._cache[key]
+
+        # Cache boyutu sınırlaması
+        if len(self._cache) > 1000:
+            oldest_keys = sorted(self._cache.keys(), key=lambda k: self._cache[k][0])[:100]
+            for key in oldest_keys:
+                del self._cache[key]
+            LOG.debug("Cache limit exceeded. Removed 100 oldest records")
+
+        self._last_cache_cleanup = current_time
+        LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        signed: bool = False,
+        futures: bool = False,
+        max_retries: Optional[int] = None,
+        priority: RequestPriority = RequestPriority.NORMAL,
+    ) -> Any:
+        """Ana HTTP request methodu - Tüm istekler buradan geçer.
+        
+        Exponential backoff ile retry, rate limiting, caching ve error handling
+        özelliklerini içerir.
+        
+        Args:
+            method: HTTP metodu (GET, POST, vb.)
+            path: API endpoint yolu
+            params: İstek parametreleri
+            signed: İmzalı istek gerekiyor mu
+            futures: Futures API kullanılacak mı
+            max_retries: Maksimum yeniden deneme sayısı
+            priority: İstek önceliği
+            
+        Returns:
+            Any: API yanıt verisi
+            
+        Raises:
+            ValueError: İmzalı istek için API anahtarı yoksa
+            Exception: Maksimum yeniden deneme sayısı aşılırsa veya diğer hatalar
+        """
+        try:
+            if max_retries is None:
+                max_retries = CONFIG.BINANCE.DEFAULT_RETRY_ATTEMPTS
+
+            # 🔹 Minimum interval kontrolü
+            current_time = time.time()
+            time_since_last = current_time - self.last_request_time
+            if time_since_last < self.min_request_interval:
+                await asyncio.sleep(self.min_request_interval - time_since_last)
+
+            self.last_request_time = time.time()
+            self.metrics.total_requests += 1
+
+            # 🔹 Base URL ve headers
+            base_url = CONFIG.BINANCE.FAPI_URL if futures else CONFIG.BINANCE.BASE_URL
+            headers = {}
+            params = params or {}
+
+            # 🔹 Signed request
+            if signed:
+                if not self.api_key or not self.secret_key:
+                    raise ValueError("API key and secret key are required for signed requests")
+                signed_params = dict(params)
+                signed_params["timestamp"] = int(time.time() * 1000)
+                query = urlencode(signed_params)
+                signature = hmac.new(self.secret_key.encode(), query.encode(), hashlib.sha256).hexdigest()
+                signed_params["signature"] = signature
+                params = signed_params
+                headers["X-MBX-APIKEY"] = self.api_key
+            # 🔹 Public ama API key mevcutsa yine ekle
+            elif self.api_key:
+                headers["X-MBX-APIKEY"] = self.api_key
+
+            # 🔹 Cache cleanup
+            if time.time() - self._last_cache_cleanup > CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
+                self._cleanup_cache()
+                self._last_cache_cleanup = time.time()
+
+            # 🔹 Cache kontrolü
+            cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
+            ttl = getattr(CONFIG.BINANCE, "BINANCE_TICKER_TTL", 0)
+
+            if ttl > 0 and cache_key in self._cache:
+                ts_cache, data = self._cache[cache_key]
+                if time.time() - ts_cache < ttl:
+                    self.metrics.cache_hits += 1
+                    LOG.debug(f"Cache hit for {cache_key}")
+                    return data
+                else:
+                    self.metrics.cache_misses += 1
+                    del self._cache[cache_key]
+
+            # 🔹 Retry loop
+            attempt = 0
+            last_exception = None
+            start_time = time.time()
+
+            while attempt < max_retries:
+                attempt += 1
+                try:
+                    async with self.limiter:  # aiolimiter
+                        async with self.semaphores[priority]:
+                            r = await self.client.request(method, path, params=params, headers=headers)
+
+                    if r.status_code == 200:
+                        data = r.json()
+                        if ttl > 0:
+                            self._cache[cache_key] = (time.time(), data)
+
+                        response_time = time.time() - start_time
+                        self.request_times.append(response_time)
+                        if len(self.request_times) > 100:
+                            self.request_times.pop(0)
+
+                        self.metrics.avg_response_time = sum(self.request_times) / len(self.request_times)
+                        self.metrics.last_request_time = time.time()
+                        return data
+
+                    if r.status_code == 429:
+                        self.metrics.rate_limited_requests += 1
+                        retry_after = int(r.headers.get("Retry-After", 1))
+                        delay = min(2 ** attempt, 60) + retry_after
+                        LOG.warning(f"Rate limited for {path}. Sleeping {delay}s (attempt {attempt}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+
+                    r.raise_for_status()
+
+                except httpx.HTTPStatusError as e:
+                    if e.response is not None and e.response.status_code >= 500:
+                        delay = min(2 ** attempt, 30)
+                        LOG.warning(f"Server error {e.response.status_code} for {path}, retrying in {delay}s")
+                        await asyncio.sleep(delay)
+                        last_exception = e
+                        continue
+                    else:
+                        self.metrics.failed_requests += 1
+                        LOG.error(f"HTTP error {getattr(e.response,'status_code',None)} for {path}: {e}")
+                        raise
+
+                except (httpx.RequestError, asyncio.TimeoutError) as e:
+                    last_exception = e
+                    self.metrics.failed_requests += 1
+                    delay = min(2 ** attempt, 60) + random.uniform(0, 0.3)
+                    LOG.error(f"Request error for {path}: {e}, retrying in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+
+            raise last_exception or Exception(f"Max retries ({max_retries}) exceeded for {path}")
+
+        except Exception as e:
+            LOG.error(f"Request failed for {method} {path}: {str(e)}")
+            raise
+
+    async def get_server_time(self) -> Dict[str, Any]:
+        """Sunucu zamanını getir - Circuit breaker ile sarılı.
+        
+        Returns:
+            Dict[str, Any]: Sunucu zamanı bilgisi
+        """
+        return await binance_circuit_breaker.execute(self._request, "GET", "/api/v3/time")
+
+    async def get_exchange_info(self) -> Dict[str, Any]:
+        """Exchange bilgilerini getir - Circuit breaker ile sarılı.
+        
+        Returns:
+            Dict[str, Any]: Exchange bilgileri
+        """
+        return await binance_circuit_breaker.execute(self._request, "GET", "/api/v3/exchangeInfo")
+
+    async def get_symbol_price(self, symbol: str) -> Dict[str, Any]:
+        """Sembol fiyatını getir - Circuit breaker ile sarılı.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            
+        Returns:
+            Dict[str, Any]: Sembol fiyat bilgisi
+        """
+        return await binance_circuit_breaker.execute(
+            self._request, "GET", "/api/v3/ticker/price", 
+            {"symbol": symbol.upper()}
+        )
+
+    def get_metrics(self) -> RequestMetrics:
+        """Request metriklerini getir.
+        
+        Returns:
+            RequestMetrics: İstek metrikleri nesnesi
+        """
+        return self.metrics
+
+    def reset_metrics(self) -> None:
+        """Metrikleri sıfırla."""
+        self.metrics = RequestMetrics()
+        self.request_times = []
+
+    async def close(self) -> None:
+        """HTTP client'ı temiz bir şekilde kapat."""
+        try:
+            await self.client.aclose()
+            LOG.info("HTTP client closed successfully")
+        except Exception as e:
+            LOG.error(f"Error closing HTTP client: {e}")
+
+# -------------------------------------------------------------
+# WebSocket Manager - Gelişmiş Reconnect ve Error Handling
+# -------------------------------------------------------------
