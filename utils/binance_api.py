@@ -837,6 +837,14 @@ class BinanceClient:
             LOG.error(f"Error getting account info: {e}")
             raise
 
+	async def create_listen_key(self) -> str:
+        """Private websocket için listenKey oluşturur"""
+        await self._require_keys()
+        res = await self.http._request(
+            "POST", "/api/v3/userDataStream", signed=False
+        )
+        return res.get("listenKey")
+
     async def place_order(self, symbol: str, side: str, type_: str,
                           quantity: float, price: Optional[float] = None) -> Dict[str, Any]:
         """Yeni order oluştur"""
@@ -1083,6 +1091,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
