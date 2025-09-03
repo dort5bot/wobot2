@@ -34,8 +34,7 @@ from urllib.parse import urlencode
 from dataclasses import dataclass
 from collections import defaultdict
 from enum import Enum
-
-import ccxt.async_support as ccxt  # ✅ CCXT ile değiştir
+import ccxt.async_support as ccxt
 
 from utils.config import CONFIG
 
@@ -1112,6 +1111,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
