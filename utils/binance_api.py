@@ -484,6 +484,7 @@ class BinanceWebSocketManager:
         LOG.info("WebSocket Manager initialized")
 
 	# WebSocketManager için tutarlı bir _listen_stream implementasyonu
+	# Düzeltilmiş _listen_stream fonksiyonu
 	async def _listen_stream(self, stream_name: str):
 	    """WebSocket loop: reconnect + callback safe execution"""
 	    while self._running:
@@ -1110,6 +1111,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
