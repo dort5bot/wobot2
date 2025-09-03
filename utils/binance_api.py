@@ -523,17 +523,19 @@ class BinanceWebSocketManager:
 			ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
 			self.connections[stream_name] = ws
 			self.metrics.total_connections += 1
+			
+			# Dinleme görevini başlat
+			task = asyncio.create_task(self._listen_stream(stream_name))
+			self._tasks.add(task)
+			task.add_done_callback(lambda t: self._tasks.discard(t))
+			LOG.info(f"WebSocket connection created for {stream_name}")
+			return ws
+			
+	except Exception as e:
+		self.metrics.failed_connections += 1
+		LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
+		raise
 
-        # Dinleme görevini başlat
-		task = asyncio.create_task(self._listen_stream(stream_name))
-		self._tasks.add(task)
-		task.add_done_callback(lambda t: self._tasks.discard(t))
-		
-		LOG.info(f"WebSocket connection created for {stream_name}")
-except Exception as e:
-	self.metrics.failed_connections += 1
-	LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
-	raise
 
     async def _reconnect(self, stream_name: str):
         """Bağlantıyı yeniden kur"""
@@ -1079,6 +1081,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
