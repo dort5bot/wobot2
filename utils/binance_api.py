@@ -767,7 +767,11 @@ class BinanceWebSocketManager:
         Returns:
             WSMetrics: WebSocket metrikleri nesnesi
         """
+        if self._message_times:
+            interval = max(self._message_times[-1] - self._message_times[0], 1)
+            self.metrics.avg_message_rate = len(self._message_times) / interval
         return self.metrics
+
 
     def reset_metrics(self) -> None:
         """Metrikleri sıfırla."""
