@@ -239,18 +239,21 @@ class BinanceHTTPClient:
         
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
         
-		# HTTP client configuration - mevcut koda ekleme
+		# HTTP client configuration - .env dosyasındaki SSL_CERT_PATH değeri boşsa, bu da hata verebilir.
 		self.client = httpx.AsyncClient(
-		base_url=CONFIG.BINANCE.BASE_URL, 
-		timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
-			limits=httpx.Limits(
-				max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
-				max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
-				keepalive_expiry=300  # 5 dakika
-			),
-			http2=True  HTTP/2 desteği
+		    base_url=CONFIG.BINANCE.BASE_URL,
+		    timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
+		    limits=httpx.Limits(
+		        max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
+		        max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
+		        keepalive_expiry=300  # 5 dakika
+		    ),
+		    http2=True,  # HTTP/2 desteği
+		    verify=True,  # SSL sertifika doğrulaması
+		    cert=os.getenv('SSL_CERT_PATH')  # Özel sertifika yolu
 		)
-        
+
+
         # Concurrency control with priority support
         self.semaphores = {
             RequestPriority.HIGH: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY),
@@ -1055,6 +1058,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
