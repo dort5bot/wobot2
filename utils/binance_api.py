@@ -329,7 +329,7 @@ class BinanceHTTPClient:
                 self._last_cache_cleanup = current_time_cleanup
 
             # Cache key oluştur
-			cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
+            cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
 			ttl = CONFIG.BINANCE.BINANCE_TICKER_TTL
 		
 			# Cache hit kontrolü
@@ -1040,6 +1040,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
