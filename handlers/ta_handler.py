@@ -28,11 +28,15 @@ async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.D
         logger.debug(f"Fetching OHLCV for {symbol}, {hours}h, {interval}")
         client = get_binance_api()
         limit = max(hours * 3, 200)
-        kl = await client.get_klines(symbol, interval=interval, limit=limit)
-        
+
+        # Eğer sync ise:
+        kl = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+
         if not kl:
             logger.error(f"No data returned for {symbol}")
             return pd.DataFrame()
+
+        logger.debug(f"Raw data sample for {symbol}: {kl[:2]}")
 
         df = pd.DataFrame(
             kl,
@@ -41,15 +45,13 @@ async def fetch_ohlcv(symbol: str, hours: int = 4, interval: str = "1h") -> pd.D
                 "close_time", "qav", "trades", "taker_base", "taker_quote", "ignore"
             ]
         )
-        
-        # Convert to float
+
         numeric_columns = ["open", "high", "low", "close", "volume"]
         for col in numeric_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        logger.debug(f"Fetched {len(df)} rows for {symbol}")
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
         return df
-        
+
     except Exception as e:
         logger.error(f"Error fetching OHLCV for {symbol}: {e}")
         return pd.DataFrame()
