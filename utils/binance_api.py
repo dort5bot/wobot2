@@ -1,4 +1,4 @@
-#binance_api.py 903-1614
+#binance_api.py 903-20:20	satır_sayısı:1122
 '''
 ✅ Tüm API çağrıları try-except ile sarıldı
 ✅ Tutarlı logging kullanımı sağlandı
@@ -1120,46 +1120,4 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
             secret_key = os.getenv("BINANCE_API_SECRET")
         binance_client = BinanceClient(api_key, secret_key)
     return binance_client
-
-
 # EOF
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
