@@ -329,12 +329,13 @@ class BinanceHTTPClient:
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
 
         # 🔹 HTTP client configuration
+        # BinanceHTTPClient'da kullanın:
         self.client = httpx.AsyncClient(
             base_url=CONFIG.BINANCE.BASE_URL,
             timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
             limits=httpx.Limits(
-                max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
-                max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
+                max_connections=CONFIG.BINANCE.MAX_CONNECTIONS,
+                max_keepalive_connections=CONFIG.BINANCE.MAX_KEEPALIVE_CONNECTIONS,
                 keepalive_expiry=300
             ),
             http2=True,
