@@ -276,31 +276,32 @@ class BinanceHTTPClient:
 
     # Cache temizleme mekanizmasını iyileştirme
 	def _cleanup_cache(self):
-		"""Expired cache entries'ini temizle - daha verimli versiyon"""
-		current_time = time.time()
-		if current_time - self._last_cache_cleanup < CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
-        	return
-		
-		# Toplu silme için liste oluştur
-		expired_keys = [
-			key for key, (ts, _) in self._cache.items()
-			if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL
-		]
-		# Toplu silme işlemi
-		for key in expired_keys:
-			del self._cache[key]
-			
-        # Cache boyutu sınırlaması
-		if len(self._cache) > 1000:
-			# En eski 100 kaydı sil
-			oldest_keys = sorted(self._cache.keys(), key=lambda k: self._cache[k][0])[:100]
-			for key in oldest_keys:
-				del self._cache[key]
-			LOG.debug(f"Cache limit exceeded. Removed 100 oldest records")
-			
-		self._last_cache_cleanup = current_time
-		LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
+    """Expired cache entries'ini temizle - daha verimli versiyon"""
+    current_time = time.time()
+    # Sık temizlemeyi önle
+    if current_time - self._last_cache_cleanup < CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
+        return
 
+    # Expired anahtarları topla
+    expired_keys = [key for key, (ts, _) in self._cache.items()
+                    if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL]
+
+    for key in expired_keys:
+        del self._cache[key]
+
+    # Cache boyutu sınırlaması
+    if len(self._cache) > 1000:
+        oldest_keys = sorted(self._cache.keys(), key=lambda k: self._cache[k][0])[:100]
+        for key in oldest_keys:
+            del self._cache[key]
+        LOG.debug("Cache limit exceeded. Removed 100 oldest records")
+
+    self._last_cache_cleanup = current_time
+    LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
+# <<< DÜZELTİLDİ
+
+	# HTTP request methodu - Tüm istekler buradan geçer;
+	#Exponential backoff ile retry,Rate limiting,Caching,Error handling
     async def _request(self, method: str, path: str, params: Optional[dict] = None,
                        signed: bool = False, futures: bool = False, 
                        max_retries: int = None, priority: RequestPriority = RequestPriority.NORMAL) -> Any:
@@ -348,95 +349,77 @@ class BinanceHTTPClient:
                 self._last_cache_cleanup = current_time_cleanup
 
             # Cache key oluştur++
+			# inside _request, replace the cache-key and retry/except blocks with:
 			cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
-			ttl = CONFIG.BINANCE.BINANCE_TICKER_TTL
-		
-			# Cache hit kontrolü
+			ttl = getattr(CONFIG.BINANCE, "BINANCE_TICKER_TTL", 0)
+			
+			# Cache check
 			if ttl > 0 and cache_key in self._cache:
-				ts_cache, data = self._cache[cache_key]
-				if time.time() - ts_cache < ttl:
-					self.metrics.cache_hits += 1
-					LOG.debug(f"Cache hit for {cache_key}")
-					return data
-				else:
-					self.metrics.cache_misses += 1
-					del self._cache[cache_key]
-					
-					# 🔹 Yeni: Max cache size kontrolü
-					if len(self._cache) > 1000:
-						oldest_key = min(self._cache, key=lambda k: self._cache[k][0])
-						del self._cache[oldest_key]
-						LOG.debug(f"Cache limit aşıldı. En eski kayıt silindi: {oldest_key}")
+			    ts_cache, data = self._cache[cache_key]
+			    if time.time() - ts_cache < ttl:
+			        self.metrics.cache_hits += 1
+			        LOG.debug(f"Cache hit for {cache_key}")
+			        return data
+			    else:
+			        self.metrics.cache_misses += 1
+			        del self._cache[cache_key]
+			
+			# Retry loop
+			attempt = 0
+			last_exception = None
+			start_time = time.time()
+			
+			while attempt < max_retries:
+			    attempt += 1
+			    try:
+			        async with self.semaphores[priority]:
+			            r = await self.client.request(method, path, params=params, headers=headers)
+			
+			        if r.status_code == 200:
+			            data = r.json()
+			            if ttl > 0:
+			                self._cache[cache_key] = (time.time(), data)
+			            # metrics
+			            response_time = time.time() - start_time
+			            self.request_times.append(response_time)
+			            if len(self.request_times) > 100:
+			                self.request_times.pop(0)
+			            self.metrics.avg_response_time = sum(self.request_times) / len(self.request_times)
+			            self.metrics.last_request_time = time.time()
+			            return data
+			
+			        if r.status_code == 429:
+			            self.metrics.rate_limited_requests += 1
+			            retry_after = int(r.headers.get("Retry-After", 1))
+			            delay = min(2 ** attempt, 60) + retry_after
+			            LOG.warning(f"Rate limited for {path}. Sleeping {delay}s (attempt {attempt}/{max_retries})")
+			            await asyncio.sleep(delay)
+			            continue
+			
+			        r.raise_for_status()
+			
+			    except httpx.HTTPStatusError as e:
+			        if e.response is not None and e.response.status_code >= 500:
+			            delay = min(2 ** attempt, 30)
+			            LOG.warning(f"Server error {e.response.status_code} for {path}, retrying in {delay}s")
+			            await asyncio.sleep(delay)
+			            last_exception = e
+			            continue
+			        else:
+			            self.metrics.failed_requests += 1
+			            LOG.error(f"HTTP error {getattr(e.response,'status_code',None)} for {path}: {e}")
+			            raise
+			
+			    except (httpx.RequestError, asyncio.TimeoutError) as e:
+			        last_exception = e
+			        self.metrics.failed_requests += 1
+			        delay = min(2 ** attempt, 60) + random.uniform(0, 0.3)
+			        LOG.error(f"Request error for {path}: {e}, retrying in {delay:.1f}s")
+			        await asyncio.sleep(delay)
+			
+			# After retries
+			raise last_exception or Exception(f"Max retries ({max_retries}) exceeded for {path}")
 
-            # Retry loop
-            attempt = 0
-            last_exception = None
-            start_time = time.time()
-            
-            while attempt < max_retries:
-                attempt += 1
-                try:
-                    # Priority-based semaphore kullanımı
-                    async with self.semaphores[priority]:
-                        r = await self.client.request(method, path, params=params, headers=headers)
-                    
-                    # Başarılı response
-                    if r.status_code == 200:
-                        data = r.json()
-                        
-                        # Cache'e kaydet (TTL > 0 ise)
-                        if ttl > 0:
-                            self._cache[cache_key] = (time.time(), data)
-                        
-                        # Response time metriğini güncelle
-                        response_time = time.time() - start_time
-                        self.request_times.append(response_time)
-                        if len(self.request_times) > 100:
-                            self.request_times.pop(0)
-                        self.metrics.avg_response_time = sum(self.request_times) / len(self.request_times)
-                        self.metrics.last_request_time = time.time()
-                        
-                        return data
-                    
-                    # Rate limit hatası
-                    if r.status_code == 429:
-                        self.metrics.rate_limited_requests += 1
-                        retry_after = int(r.headers.get("Retry-After", 1))
-                        delay = min(2 ** attempt, 60) + retry_after
-                        LOG.warning(f"Rate limited for {path}. Sleeping {delay}s (attempt {attempt}/{max_retries})")
-                        await asyncio.sleep(delay)
-                        continue
-                    
-                    # Diğer HTTP hataları
-                    r.raise_for_status()
-                    
-                except httpx.HTTPStatusError as e:
-                    # Server error'ları için retry
-                    if e.response.status_code >= 500:
-                        delay = min(2 ** attempt, 30)
-                        LOG.warning(f"Server error {e.response.status_code} for {path}, retrying in {delay}s")
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        self.metrics.failed_requests += 1
-                        LOG.error(f"HTTP error {e.response.status_code} for {path}: {e}")
-                        raise
-                        
-                #
-				except (httpx.RequestError, asyncio.TimeoutError) as e:
-					 # Network hataları için retry
-					 last_exception = e
-					 self.metrics.failed_requests += 1
-					
-					 # 🔹 Yeni: Exponential backoff + jitter
-					delay = min(2 ** attempt, 60) + random.uniform(0, 0.3)
-					LOG.error(f"Request error for {path}: {e}, retrying in {delay:.1f}s")
-					await asyncio.sleep(delay)
-
-            
-            # Tüm retry'lar başarısız oldu
-            raise last_exception or Exception(f"Max retries ({max_retries}) exceeded for {path}")
-            
         except Exception as e:
             LOG.error(f"Request failed for {method} {path}: {str(e)}")
             raise
@@ -1096,6 +1079,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
