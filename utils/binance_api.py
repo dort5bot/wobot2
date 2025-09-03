@@ -465,45 +465,45 @@ class BinanceWebSocketManager:
         self._tasks: set[asyncio.Task] = set()
         LOG.info("WebSocket Manager initialized")
 
-	# değiştirilecek alan: BinanceWebSocketManager._listen_stream (tamamını yenile)
-    async def _listen_stream(self, stream_name: str):
-        """WebSocket loop: reconnect + callback safe execution"""
-        while self._running:
-            try:
-                url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-                async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-                    self.connections[stream_name] = ws
-                    LOG.info(f"WS connected: {stream_name}")
-                    self.metrics.total_connections += 1
-
-                    async for msg in ws:
-                        self.metrics.messages_received += 1
-                        self._message_times.append(time.time())
-
-                        # Keep only last 100 message times
-                        if len(self._message_times) > 100:
-                            self._message_times.pop(0)
-
-                        try:
-                            data = json.loads(msg)
-                        except Exception as e:
-                            LOG.error(f"Failed to parse WS message ({stream_name}): {e}")
-                            continue
-
-                        # Execute all callbacks safely
-                        for cb in list(self.callbacks.get(stream_name, [])):
-                            try:
-                                if asyncio.iscoroutinefunction(cb):
-                                    asyncio.create_task(cb(data))
-                                else:
-                                    asyncio.get_running_loop().run_in_executor(None, cb, data)
-                            except Exception as e:
-                                LOG.error(f"Callback error for {stream_name}: {e}")
-
-            except Exception as e:
-                self.metrics.failed_connections += 1
-                LOG.warning(f"WS reconnect {stream_name} in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s: {e}")
-                await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
+	# WebSocketManager için tutarlı bir _listen_stream implementasyonu
+	async def _listen_stream(self, stream_name: str):
+	    """WebSocket loop: reconnect + callback safe execution"""
+	    while self._running:
+	        try:
+	            url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+	            async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+	                self.connections[stream_name] = ws
+	                LOG.info(f"WS connected: {stream_name}")
+	                self.metrics.total_connections += 1
+	                
+	                async for msg in ws:
+	                    self.metrics.messages_received += 1
+	                    self._message_times.append(time.time())
+	                    
+	                    # Keep only last 100 message times
+	                    if len(self._message_times) > 100:
+	                        self._message_times.pop(0)
+	                    
+	                    try:
+	                        data = json.loads(msg)
+	                    except Exception as e:
+	                        LOG.error(f"Failed to parse WS message ({stream_name}): {e}")
+	                        continue
+	                    
+	                    # Execute all callbacks safely
+	                    for cb in list(self.callbacks.get(stream_name, [])):
+	                        try:
+	                            if asyncio.iscoroutinefunction(cb):
+	                                await cb(data)
+	                            else:
+	                                cb(data)
+	                        except Exception as e:
+	                            LOG.error(f"Callback error for {stream_name}: {e}")
+	        
+	        except Exception as e:
+	            self.metrics.failed_connections += 1
+	            LOG.warning(f"WS reconnect {stream_name} in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s: {e}")
+	            await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
 
     async def subscribe(self, stream_name: str, callback: Callable):
         """Yeni bir WebSocket stream'ine subscribe ol"""
