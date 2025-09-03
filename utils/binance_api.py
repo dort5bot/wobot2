@@ -234,45 +234,49 @@ binance_circuit_breaker = CircuitBreaker(
 # -------------------------------------------------------------
 class BinanceHTTPClient:
     def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None):
-        # 🔹 user_id parametresi KALDIRILDI
+        # 🔹 API key/secret
         self.api_key = api_key
         self.secret_key = secret_key
-        self._last_request = 0  # Burada girinti düzgün
-		self.limiter = AsyncLimiter(10, 1)  # saniyede max 10 request
-        
+        self._last_request = 0
+
+        # 🔹 aiolimiter: config üzerinden ayarlanabilir
+        self.limiter = AsyncLimiter(
+            CONFIG.BINANCE.LIMITER_RATE,
+            CONFIG.BINANCE.LIMITER_PERIOD
+        )
+
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
-        
-		# HTTP client configuration - .env dosyasındaki SSL_CERT_PATH değeri boşsa, bu da hata verebilir.
-		self.client = httpx.AsyncClient(
-		    base_url=CONFIG.BINANCE.BASE_URL,
-		    timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
-		    limits=httpx.Limits(
-		        max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
-		        max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
-		        keepalive_expiry=300  # 5 dakika
-		    ),
-		    http2=True,  # HTTP/2 desteği
-		    verify=True,  # SSL sertifika doğrulaması
-		    cert=os.getenv('SSL_CERT_PATH')  # Özel sertifika yolu
-		)
 
+        # 🔹 HTTP client configuration
+        self.client = httpx.AsyncClient(
+            base_url=CONFIG.BINANCE.BASE_URL,
+            timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
+            limits=httpx.Limits(
+                max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
+                max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
+                keepalive_expiry=300
+            ),
+            http2=True,
+            verify=True,
+            cert=os.getenv("SSL_CERT_PATH")
+        )
 
-        # Concurrency control with priority support
+        # 🔹 Concurrency control with priority support
         self.semaphores = {
             RequestPriority.HIGH: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY),
             RequestPriority.NORMAL: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY),
-            RequestPriority.LOW: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY // 2)
+            RequestPriority.LOW: asyncio.Semaphore(CONFIG.BINANCE.CONCURRENCY // 2),
         }
-        
-        # Caching system
+
+        # 🔹 Cache system
         self._cache: Dict[str, Tuple[float, Any]] = {}
         self._last_cache_cleanup = time.time()
-        
-        # Rate limiting
+
+        # 🔹 Rate limiting timing
         self.last_request_time = 0
         self.min_request_interval = 1.0 / CONFIG.BINANCE.MAX_REQUESTS_PER_SECOND
-        
-        # Metrics
+
+        # 🔹 Metrics
         self.metrics = RequestMetrics()
         self.request_times = []
 
@@ -1099,6 +1103,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
