@@ -597,6 +597,9 @@ class BinanceHTTPClient:
 # -------------------------------------------------------------
 # WebSocket Manager - Gelişmiş Reconnect ve Error Handling
 # -------------------------------------------------------------
+# -------------------------------------------------------------
+# WebSocket Manager - Gelişmiş Reconnect ve Error Handling
+# -------------------------------------------------------------
 class BinanceWebSocketManager:
     """Binance WebSocket bağlantılarını yöneten sınıf."""
     
@@ -610,6 +613,28 @@ class BinanceWebSocketManager:
         self._tasks: Set[asyncio.Task] = set()
         LOG.info("WebSocket Manager initialized")
 
+    @asynccontextmanager
+    async def websocket_connection(self, stream_name: str):
+        """WebSocket bağlantısı için context manager
+        
+        Args:
+            stream_name: Bağlantı kurulacak stream adı
+            
+        Yields:
+            websockets.WebSocketClientProtocol: WebSocket bağlantı nesnesi
+            
+        Raises:
+            Exception: WebSocket bağlantısı kurulamazsa
+        """
+        try:
+            url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+            async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+                yield ws
+        except Exception as e:
+            self.metrics.failed_connections += 1
+            LOG.error(f"WebSocket connection failed for {stream_name}: {e}")
+            raise
+
     async def _listen_stream(self, stream_name: str) -> None:
         """WebSocket döngüsü: yeniden bağlanma + callback güvenli çalıştırma.
         
@@ -621,8 +646,8 @@ class BinanceWebSocketManager:
         """
         while self._running:
             try:
-                url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-                async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+                # Context manager kullanarak WebSocket bağlantısı
+                async with self.websocket_connection(stream_name) as ws:
                     self.connections[stream_name] = ws
                     LOG.info(f"WS connected: {stream_name}")
                     self.metrics.total_connections += 1
@@ -683,19 +708,19 @@ class BinanceWebSocketManager:
         Raises:
             Exception: Bağlantı oluşturulamazsa
         """
-        url = f"wss://stream.binance.com:9443/ws/{stream_name}"
         try:
-            ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
-            self.connections[stream_name] = ws
-            self.metrics.total_connections += 1
-            
-            # Dinleme görevini başlat
-            task = asyncio.create_task(self._listen_stream(stream_name))
-            self._tasks.add(task)
-            task.add_done_callback(lambda t: self._tasks.discard(t))
-            LOG.info(f"WebSocket connection created for {stream_name}")
-            return ws
-            
+            # Context manager kullanarak bağlantı oluştur
+            async with self.websocket_connection(stream_name) as ws:
+                self.connections[stream_name] = ws
+                self.metrics.total_connections += 1
+                
+                # Dinleme görevini başlat
+                task = asyncio.create_task(self._listen_stream(stream_name))
+                self._tasks.add(task)
+                task.add_done_callback(lambda t: self._tasks.discard(t))
+                LOG.info(f"WebSocket connection created for {stream_name}")
+                return ws
+                
         except Exception as e:
             self.metrics.failed_connections += 1
             LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
@@ -720,8 +745,10 @@ class BinanceWebSocketManager:
         await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
         if self._running:
             try:
-                await self._create_connection(stream_name)
-                LOG.info(f"Reconnected to {stream_name}")
+                # Context manager ile yeniden bağlan
+                async with self.websocket_connection(stream_name) as ws:
+                    self.connections[stream_name] = ws
+                    LOG.info(f"Reconnected to {stream_name}")
             except Exception as e:
                 LOG.error(f"Failed to reconnect {stream_name}: {e}")
 
@@ -773,6 +800,13 @@ class BinanceWebSocketManager:
                 LOG.error(f"Error closing WebSocket for {stream_name}: {e}")
         self.connections.clear()
         self.callbacks.clear()
+        
+        # Tüm task'ları iptal et
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+        
         LOG.info("All WebSocket connections closed")
 
     def get_metrics(self) -> WSMetrics:
@@ -786,12 +820,18 @@ class BinanceWebSocketManager:
             self.metrics.avg_message_rate = len(self._message_times) / interval
         return self.metrics
 
-
     def reset_metrics(self) -> None:
         """Metrikleri sıfırla."""
         self.metrics = WSMetrics()
         self._message_times = []
 
+    async def __aenter__(self):
+        """Async context manager entry"""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - tüm bağlantıları kapat"""
+        await self.close_all()
 
 # -------------------------------------------------------------
 # Veri Formatı Dönüşüm Fonksiyonları
