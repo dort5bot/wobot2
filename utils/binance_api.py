@@ -28,7 +28,7 @@ import random
 import httpx
 import websockets
 import pandas as pd
-from typing import Any, Dict, List, Optional, Tuple, Callable
+from typing import Any, Dict, List, Optional, Tuple, Callable, Union, Set
 from urllib.parse import urlencode
 from dataclasses import dataclass
 from collections import defaultdict
@@ -729,7 +729,7 @@ class BinanceClient:
             LOG.error(f"Error getting agg trades for {symbol}: {e}")
             raise
 
-    async def get_klines(self, symbol: str, interval: str = "1m", limit: int = 500) -> List[List[Any]]:
+    async def get_klines(self, symbol: str, interval: str = "1m", limit: int = 500) -> List[List[Union[str, float, int]]]:
         """Kline verisini getir"""
         try:
             return await binance_circuit_breaker.execute(
@@ -1058,6 +1058,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
