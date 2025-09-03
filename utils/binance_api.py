@@ -224,7 +224,8 @@ class BinanceHTTPClient:
         self.client = httpx.AsyncClient(
             base_url=CONFIG.BINANCE.BASE_URL, 
             timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
-            limits=httpx.Limits(max_connections=CONFIG.BINANCE.CONCURRENCY * 2, max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY)
+            limits=httpx.Limits(max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
+                                max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY)
         )
         
         # Concurrency control with priority support
@@ -288,14 +289,13 @@ class BinanceHTTPClient:
             # Signed request'ler için signature oluştur
             if signed:
                 if not self.api_key or not self.secret_key:
-                    raise ValueError("Bu endpoint için API key + secret gerekli")
-                    
-                ts = int(time.time() * 1000)
-                params["timestamp"] = ts
-                query = urlencode(params)
-                signature = hmac.new(self.secret_key.encode(),
-                                     query.encode(), hashlib.sha256).hexdigest()
-                params["signature"] = signature
+                    raise ValueError("API key and secret key are required for signed requests")
+                signed_params = dict(params) if params else {}
+                signed_params["timestamp"] = int(time.time() * 1000)
+                query = urlencode(signed_params)
+                signature = hmac.new(self.secret_key.encode(), query.encode(), hashlib.sha256).hexdigest()
+                signed_params["signature"] = signature
+                params = signed_params
                 headers["X-MBX-APIKEY"] = self.api_key
 
             # Cache temizleme - periyodik olarak
@@ -327,7 +327,7 @@ class BinanceHTTPClient:
                 try:
                     # Priority-based semaphore kullanımı
                     async with self.semaphores[priority]:
-                        r = await self.client.request(method, base_url + path, params=params, headers=headers)
+                        r = await self.client.request(method, path, params=params, headers=headers)
                     
                     # Başarılı response
                     if r.status_code == 200:
@@ -428,38 +428,40 @@ class BinanceWebSocketManager:
         self.metrics = WSMetrics()
         self._running = True
         self._message_times = []
+        self._tasks: set[asyncio.Task] = set()
         LOG.info("WebSocket Manager initialized")
 
-    async def _listen(self, stream_url: str, callback: Callable[[Dict[str, Any]], Any]):
-        """WebSocket dinleme loop'u - Otomatik reconnect ile"""
-        while self._running:
-            try:
-                async with websockets.connect(stream_url, ping_interval=20, ping_timeout=10) as ws:
-                    LOG.info(f"Connected to {stream_url}")
-                    self.metrics.total_connections += 1
-                    
-                    async for msg in ws:
-                        try:
-                            receive_time = time.time()
-                            self.metrics.messages_received += 1
-                            self._message_times.append(receive_time)
-                            
-                            # Message rate hesapla (son 100 message)
-                            if len(self._message_times) > 100:
-                                self._message_times.pop(0)
-                            if len(self._message_times) > 1:
-                                time_diff = self._message_times[-1] - self._message_times[0]
-                                self.metrics.avg_message_rate = len(self._message_times) / time_diff if time_diff > 0 else 0
-                            
-                            data = json.loads(msg)
-                            # Callback'i async olarak çalıştır (blocklamamak için)
-                            asyncio.create_task(callback(data))
-                        except Exception as cb_err:
-                            LOG.error(f"Callback error: {cb_err}")
-            except Exception as e:
-                self.metrics.failed_connections += 1
-                LOG.warning(f"WS connection error: {e}, reconnecting in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s")
-                await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
+	# değiştirilecek alan: BinanceWebSocketManager._listen_stream (tamamını yenile)
+	async def _listen_stream(self, stream_name: str):
+		"""WebSocket loop: reconnect + callback safe execution"""
+		url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+		while self._running:
+			try:
+				async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+					LOG.info(f"WS connected: {stream_name}")
+					self.metrics.total_connections += 1
+					async for msg in ws:
+						self.metrics.messages_received += 1
+						self._message_times.append(time.time())
+						if len(self._message_times) > 100:
+							self._message_times.pop(0)
+						try:
+							data = json.loads(msg)
+						except Exception as pe:
+							LOG.error(f"Failed to parse WS message ({stream_name}): {pe}")
+							continue
+						for cb in list(self.callbacks.get(stream_name, [])):
+							try:
+								if asyncio.iscoroutinefunction(cb):
+									asyncio.create_task(cb(data))
+								else:
+									asyncio.get_running_loop().run_in_executor(None, cb, data)
+							except Exception as e:
+								LOG.error(f"Callback error for {stream_name}: {e}")
+			except Exception as e:
+				self.metrics.failed_connections += 1
+				LOG.warning(f"WS reconnect {stream_name} in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s: {e}")
+				await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
 
     async def subscribe(self, stream_name: str, callback: Callable):
         """Yeni bir WebSocket stream'ine subscribe ol"""
@@ -469,18 +471,24 @@ class BinanceWebSocketManager:
         LOG.info(f"Subscribed to {stream_name}")
 
     async def _create_connection(self, stream_name: str):
-        """Yeni WebSocket bağlantısı oluştur"""
-        url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-        try:
-            ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
-            self.connections[stream_name] = ws
-            self.metrics.total_connections += 1
-            asyncio.create_task(self._listen_stream(stream_name))
-            LOG.info(f"WebSocket connection created for {stream_name}")
-        except Exception as e:
-            self.metrics.failed_connections += 1
-            LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
-            raise
+    """Yeni WebSocket bağlantısı oluştur"""
+    url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+    try:
+        ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
+        self.connections[stream_name] = ws
+        self.metrics.total_connections += 1
+
+        # Eklenecek alan: BinanceWebSocketManager._create_connection
+        task = asyncio.create_task(self._listen_stream(stream_name))
+        self._tasks.add(task)
+        task.add_done_callback(lambda t: self._tasks.discard(t))
+
+        LOG.info(f"WebSocket connection created for {stream_name}")
+    except Exception as e:
+        self.metrics.failed_connections += 1
+        LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
+        raise
+
 
     async def _listen_stream(self, stream_name: str):
         """Belirli bir stream'i dinle"""
@@ -621,9 +629,8 @@ class BinanceClient:
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-
+            self.loop = None  # library seviyesinde event loop oluşturma yok
+            
         LOG.info("BinanceClient initialized successfully")
 
     def test_connection(self):
@@ -730,7 +737,7 @@ class BinanceClient:
                 self.http._request, "GET", "/api/v3/ticker/24hr"
             )
         except Exception as e:
-            LOG.error("Error getting all 24h tickers: {e}")
+            LOG.error(f"Error getting all 24h tickers: {e}")
             raise
 
     async def get_all_symbols(self) -> List[str]:
@@ -990,6 +997,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
