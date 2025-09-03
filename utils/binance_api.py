@@ -303,7 +303,6 @@ class BinanceHTTPClient:
 # <<< DÜZELTİLDİ
 
 	# HTTP request methodu - Tüm istekler buradan geçer;
-	#Exponential backoff ile retry,Rate limiting,Caching,Error handling
     async def _request(self, method: str, path: str, params: Optional[dict] = None,
                        signed: bool = False, futures: bool = False, 
                        max_retries: int = None, priority: RequestPriority = RequestPriority.NORMAL) -> Any:
@@ -374,53 +373,55 @@ class BinanceHTTPClient:
 			while attempt < max_retries:
 			    attempt += 1
 			    try:
-			        async with self.semaphores[priority]:
-			            r = await self.client.request(method, path, params=params, headers=headers)
-			
-			        if r.status_code == 200:
-			            data = r.json()
-			            if ttl > 0:
-			                self._cache[cache_key] = (time.time(), data)
-			            # metrics
-			            response_time = time.time() - start_time
-			            self.request_times.append(response_time)
-			            if len(self.request_times) > 100:
-			                self.request_times.pop(0)
-			            self.metrics.avg_response_time = sum(self.request_times) / len(self.request_times)
-			            self.metrics.last_request_time = time.time()
-			            return data
-			
-			        if r.status_code == 429:
-			            self.metrics.rate_limited_requests += 1
-			            retry_after = int(r.headers.get("Retry-After", 1))
-			            delay = min(2 ** attempt, 60) + retry_after
-			            LOG.warning(f"Rate limited for {path}. Sleeping {delay}s (attempt {attempt}/{max_retries})")
-			            await asyncio.sleep(delay)
-			            continue
-			
-			        r.raise_for_status()
-			
-			    except httpx.HTTPStatusError as e:
-			        if e.response is not None and e.response.status_code >= 500:
-			            delay = min(2 ** attempt, 30)
-			            LOG.warning(f"Server error {e.response.status_code} for {path}, retrying in {delay}s")
-			            await asyncio.sleep(delay)
-			            last_exception = e
-			            continue
-			        else:
-			            self.metrics.failed_requests += 1
-			            LOG.error(f"HTTP error {getattr(e.response,'status_code',None)} for {path}: {e}")
-			            raise
-			
-			    except (httpx.RequestError, asyncio.TimeoutError) as e:
-			        last_exception = e
-			        self.metrics.failed_requests += 1
-			        delay = min(2 ** attempt, 60) + random.uniform(0, 0.3)
-			        LOG.error(f"Request error for {path}: {e}, retrying in {delay:.1f}s")
-			        await asyncio.sleep(delay)
-			
-			# After retries
-			raise last_exception or Exception(f"Max retries ({max_retries}) exceeded for {path}")
+                    # 🔹 aiolimiter burada devreye giriyor
+                    async with self.limiter:
+                        async with self.semaphores[priority]:
+                            r = await self.client.request(method, path, params=params, headers=headers)
+
+                    if r.status_code == 200:
+                        data = r.json()
+                        if ttl > 0:
+                            self._cache[cache_key] = (time.time(), data)
+
+                        response_time = time.time() - start_time
+                        self.request_times.append(response_time)
+                        if len(self.request_times) > 100:
+                            self.request_times.pop(0)
+
+                        self.metrics.avg_response_time = sum(self.request_times) / len(self.request_times)
+                        self.metrics.last_request_time = time.time()
+                        return data
+
+                    if r.status_code == 429:
+                        self.metrics.rate_limited_requests += 1
+                        retry_after = int(r.headers.get("Retry-After", 1))
+                        delay = min(2 ** attempt, 60) + retry_after
+                        LOG.warning(f"Rate limited for {path}. Sleeping {delay}s (attempt {attempt}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+
+                    r.raise_for_status()
+
+                except httpx.HTTPStatusError as e:
+                    if e.response is not None and e.response.status_code >= 500:
+                        delay = min(2 ** attempt, 30)
+                        LOG.warning(f"Server error {e.response.status_code} for {path}, retrying in {delay}s")
+                        await asyncio.sleep(delay)
+                        last_exception = e
+                        continue
+                    else:
+                        self.metrics.failed_requests += 1
+                        LOG.error(f"HTTP error {getattr(e.response,'status_code',None)} for {path}: {e}")
+                        raise
+
+                except (httpx.RequestError, asyncio.TimeoutError) as e:
+                    last_exception = e
+                    self.metrics.failed_requests += 1
+                    delay = min(2 ** attempt, 60) + random.uniform(0, 0.3)
+                    LOG.error(f"Request error for {path}: {e}, retrying in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+
+            raise last_exception or Exception(f"Max retries ({max_retries}) exceeded for {path}")
 
         except Exception as e:
             LOG.error(f"Request failed for {method} {path}: {str(e)}")
@@ -1098,6 +1099,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
