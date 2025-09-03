@@ -307,13 +307,23 @@ class BinanceHTTPClient:
 # <<< DÜZELTİLDİ
 
 	# HTTP request methodu - Tüm istekler buradan geçer;
-    async def _request(self, method: str, path: str, params: Optional[dict] = None,
-                       signed: bool = False, futures: bool = False, 
-                       max_retries: int = None, priority: RequestPriority = RequestPriority.NORMAL) -> Any:
+    # ---------------------------------------------------
+    # Ana HTTP request metodu
+    # ---------------------------------------------------
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[dict] = None,
+        signed: bool = False,
+        futures: bool = False,
+        max_retries: int = None,
+        priority: RequestPriority = RequestPriority.NORMAL,
+    ) -> Any:
         """
         Ana HTTP request methodu - Tüm istekler buradan geçer
         ✅ Exponential backoff ile retry
-        ✅ Rate limiting
+        ✅ Rate limiting (aiolimiter + semaphore)
         ✅ Caching
         ✅ Error handling
         """
@@ -321,64 +331,63 @@ class BinanceHTTPClient:
             if max_retries is None:
                 max_retries = CONFIG.BINANCE.DEFAULT_RETRY_ATTEMPTS
 
-            # Rate limiting - istekler arası minimum interval
+            # 🔹 Minimum interval kontrolü
             current_time = time.time()
             time_since_last = current_time - self.last_request_time
             if time_since_last < self.min_request_interval:
                 await asyncio.sleep(self.min_request_interval - time_since_last)
-            
+
             self.last_request_time = time.time()
             self.metrics.total_requests += 1
 
-            # Base URL ve headers ayarla
+            # 🔹 Base URL ve headers
             base_url = CONFIG.BINANCE.FAPI_URL if futures else CONFIG.BINANCE.BASE_URL
             headers = {}
             params = params or {}
 
-            # Signed request'ler için signature oluştur
+            # 🔹 Signed request
             if signed:
                 if not self.api_key or not self.secret_key:
                     raise ValueError("API key and secret key are required for signed requests")
-                signed_params = dict(params) if params else {}
+                signed_params = dict(params)
                 signed_params["timestamp"] = int(time.time() * 1000)
                 query = urlencode(signed_params)
                 signature = hmac.new(self.secret_key.encode(), query.encode(), hashlib.sha256).hexdigest()
                 signed_params["signature"] = signature
                 params = signed_params
                 headers["X-MBX-APIKEY"] = self.api_key
+            # 🔹 Public ama API key mevcutsa yine ekle
+            elif self.api_key:
+                headers["X-MBX-APIKEY"] = self.api_key
 
-            # Cache temizleme - periyodik olarak
-            current_time_cleanup = time.time()
-            if current_time_cleanup - self._last_cache_cleanup > CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
+            # 🔹 Cache cleanup
+            if time.time() - self._last_cache_cleanup > CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
                 self._cleanup_cache()
-                self._last_cache_cleanup = current_time_cleanup
+                self._last_cache_cleanup = time.time()
 
-            # Cache key oluştur++
-			# inside _request, replace the cache-key and retry/except blocks with:
-			cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
-			ttl = getattr(CONFIG.BINANCE, "BINANCE_TICKER_TTL", 0)
-			
-			# Cache check
-			if ttl > 0 and cache_key in self._cache:
-			    ts_cache, data = self._cache[cache_key]
-			    if time.time() - ts_cache < ttl:
-			        self.metrics.cache_hits += 1
-			        LOG.debug(f"Cache hit for {cache_key}")
-			        return data
-			    else:
-			        self.metrics.cache_misses += 1
-			        del self._cache[cache_key]
-			
-			# Retry loop
-			attempt = 0
-			last_exception = None
-			start_time = time.time()
-			
-			while attempt < max_retries:
-			    attempt += 1
-			    try:
-                    # 🔹 aiolimiter burada devreye giriyor
-                    async with self.limiter:
+            # 🔹 Cache kontrolü
+            cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
+            ttl = getattr(CONFIG.BINANCE, "BINANCE_TICKER_TTL", 0)
+
+            if ttl > 0 and cache_key in self._cache:
+                ts_cache, data = self._cache[cache_key]
+                if time.time() - ts_cache < ttl:
+                    self.metrics.cache_hits += 1
+                    LOG.debug(f"Cache hit for {cache_key}")
+                    return data
+                else:
+                    self.metrics.cache_misses += 1
+                    del self._cache[cache_key]
+
+            # 🔹 Retry loop
+            attempt = 0
+            last_exception = None
+            start_time = time.time()
+
+            while attempt < max_retries:
+                attempt += 1
+                try:
+                    async with self.limiter:  # aiolimiter
                         async with self.semaphores[priority]:
                             r = await self.client.request(method, path, params=params, headers=headers)
 
@@ -1103,6 +1112,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
