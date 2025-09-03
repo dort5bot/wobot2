@@ -12,8 +12,7 @@
 ✅ WebSocket otomatik recovery
 ✅ Graceful shutdown
 ✅ Detaylı metrikler ve monitoring
-.env den aldığı kişisel api ile, api gerektiren verileri çeker
-gerekmeyenler için global kullanılabilir
+.env den aldığı kişisel api key+api secret ile,sadece api gerektiren verileri çeker,sadece market verisi ceker (fiyat, funding,...)
 '''
 
 # utils/binance_api.py
@@ -991,6 +990,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
