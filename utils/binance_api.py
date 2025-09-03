@@ -1,4 +1,4 @@
-#binance_api.py 903-2031 satır_sayısı:1604
+#binance_api.py 904-0031
 '''
 FUL PEP8 UYUMLU
 * PEP 8 standartlarına uygun mu
