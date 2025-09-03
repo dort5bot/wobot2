@@ -268,21 +268,30 @@ class BinanceHTTPClient:
 
     # Cache temizleme mekanizmasını iyileştirme
 	def _cleanup_cache(self):
-	    """Expired cache entries'ini temizle - daha verimli versiyon"""
-	    current_time = time.time()
-	    if current_time - self._last_cache_cleanup < CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
-	        return
-	    
-	    expired_keys = []
-	    for key, (ts, _) in list(self._cache.items()):
-	        if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL:
-	            expired_keys.append(key)
-	    
-	    for key in expired_keys:
-	        del self._cache[key]
-	    
-	    self._last_cache_cleanup = current_time
-	    LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
+		"""Expired cache entries'ini temizle - daha verimli versiyon"""
+		current_time = time.time()
+		if current_time - self._last_cache_cleanup < CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
+        	return
+		
+		# Toplu silme için liste oluştur
+		expired_keys = [
+			key for key, (ts, _) in self._cache.items()
+			if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL
+		]
+		# Toplu silme işlemi
+		for key in expired_keys:
+			del self._cache[key]
+			
+        # Cache boyutu sınırlaması
+		if len(self._cache) > 1000:
+			# En eski 100 kaydı sil
+			oldest_keys = sorted(self._cache.keys(), key=lambda k: self._cache[k][0])[:100]
+			for key in oldest_keys:
+				del self._cache[key]
+			LOG.debug(f"Cache limit exceeded. Removed 100 oldest records")
+			
+		self._last_cache_cleanup = current_time
+		LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
 
     async def _request(self, method: str, path: str, params: Optional[dict] = None,
                        signed: bool = False, futures: bool = False, 
@@ -1042,6 +1051,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
