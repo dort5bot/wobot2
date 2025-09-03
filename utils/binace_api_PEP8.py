@@ -1,4 +1,4 @@
-#binance_api.py 903-1614
+#binance_api.py 903-2031 satır_sayısı:1604
 '''
 ✅ Tüm API çağrıları try-except ile sarıldı
 ✅ Tutarlı logging kullanımı sağlandı
@@ -1291,4 +1291,316 @@ class BinanceClient:
     # -----------
     # --- WebSocket Methods ---
     # -----------
+        async def ws_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """WebSocket ticker stream'ine subscribe ol.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            callback: Ticker verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: WebSocket aboneliği başarısız olursa
+        """
+        try:
+            stream_name = f"{symbol.lower()}@ticker"
+            await self.ws_manager.subscribe(stream_name, callback)
+        except Exception as e:
+            LOG.error(f"Error subscribing to ticker for {symbol}: {e}")
+            raise
+
+    async def ws_trades(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """WebSocket trade stream'ine subscribe ol.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            callback: Trade verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: WebSocket aboneliği başarısız olursa
+        """
+        try:
+            stream_name = f"{symbol.lower()}@trade"
+            await self.ws_manager.subscribe(stream_name, callback)
+        except Exception as e:
+            LOG.error(f"Error subscribing to trades for {symbol}: {e}")
+            raise
+
+    async def ws_order_book(self, symbol: str, depth: int, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """WebSocket order book stream'ine subscribe ol.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            depth: Order book derinliği (5, 10, 20)
+            callback: Order book verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            ValueError: Geçersiz depth değeri verilirse
+            Exception: WebSocket aboneliği başarısız olursa
+        """
+        try:
+            if depth not in [5, 10, 20]:
+                raise ValueError("Depth must be one of [5, 10, 20]")
+            stream_name = f"{symbol.lower()}@depth{depth}"
+            await self.ws_manager.subscribe(stream_name, callback)
+        except Exception as e:
+            LOG.error(f"Error subscribing to order book for {symbol}: {e}")
+            raise
+
+    async def ws_kline(self, symbol: str, interval: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """WebSocket kline stream'ine subscribe ol.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            interval: Kline aralığı (örn: 1m, 5m, 1h)
+            callback: Kline verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: WebSocket aboneliği başarısız olursa
+        """
+        try:
+            stream_name = f"{symbol.lower()}@kline_{interval}"
+            await self.ws_manager.subscribe(stream_name, callback)
+        except Exception as e:
+            LOG.error(f"Error subscribing to kline for {symbol}: {e}")
+            raise
+
+    async def ws_multiplex(self, streams: List[str], callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """WebSocket multiplex stream'ine subscribe ol.
+        
+        Args:
+            streams: Birleştirilecek stream isimleri listesi
+            callback: Multiplex verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: WebSocket aboneliği başarısız olursa
+        """
+        try:
+            combined_streams = "/".join(streams)
+            stream_name = f"streams={combined_streams}"
+            await self.ws_manager.subscribe(stream_name, callback)
+        except Exception as e:
+            LOG.error(f"Error subscribing to multiplex streams: {e}")
+            raise
+
+    def start_symbol_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Sembol ticker stream'ini başlat.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            callback: Ticker verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: Stream başlatma başarısız olursa
+        """
+        try:
+            self.ws_manager.start_symbol_ticker(symbol, callback)
+        except Exception as e:
+            LOG.error(f"Error starting symbol ticker for {symbol}: {e}")
+            raise
+
+    def start_kline_stream(self, symbol: str, interval: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Kline stream'ini başlat.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            interval: Kline aralığı (örn: 1m, 5m, 1h)
+            callback: Kline verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: Stream başlatma başarısız olursa
+        """
+        try:
+            self.ws_manager.start_kline_stream(symbol, interval, callback)
+        except Exception as e:
+            LOG.error(f"Error starting kline stream for {symbol}: {e}")
+            raise
+
+    def start_order_book(self, symbol: str, depth: int, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Order book stream'ini başlat.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            depth: Order book derinliği (5, 10, 20)
+            callback: Order book verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: Stream başlatma başarısız olursa
+        """
+        try:
+            self.ws_manager.start_order_book(symbol, depth, callback)
+        except Exception as e:
+            LOG.error(f"Error starting order book for {symbol}: {e}")
+            raise
+
+    # --- Temel Metrikler ---
+    async def order_book_imbalance(self, symbol: str, limit: int = 50) -> float:
+        """Order book imbalance'ı hesapla.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            limit: Order book limiti (varsayılan: 50)
+            
+        Returns:
+            float: Order book imbalance değeri (-1 ile 1 arasında)
+            
+        Raises:
+            Exception: Hesaplama başarısız olursa
+        """
+        try:
+            ob = await self.get_order_book(symbol, limit)
+            bids = sum(float(b[1]) for b in ob["bids"])
+            asks = sum(float(a[1]) for a in ob["asks"])
+            return (bids - asks) / max(bids + asks, 1)
+        except Exception as e:
+            LOG.error(f"Error calculating order book imbalance for {symbol}: {e}")
+            raise
+
+    async def whale_trades(self, symbol: str, usd_threshold: float = CONFIG.BINANCE.WHALE_USD_THRESHOLD) -> int:
+        """Whale trade'lerini say.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            usd_threshold: Whale trade eşik değeri (USD cinsinden)
+            
+        Returns:
+            int: Whale trade sayısı
+            
+        Raises:
+            Exception: Sayım başarısız olursa
+        """
+        try:
+            trades = await self.get_recent_trades(symbol)
+            return sum(1 for t in trades if float(t["price"]) * float(t["qty"]) > usd_threshold)
+        except Exception as e:
+            LOG.error(f"Error counting whale trades for {symbol}: {e}")
+            raise
+
+    async def volume_spike(self, symbol: str, window: int = 10) -> float:
+        """Volume spike'ı hesapla.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            window: Hesaplama penceresi (dakika cinsinden, varsayılan: 10)
+            
+        Returns:
+            float: Volume spike oranı
+            
+        Raises:
+            Exception: Hesaplama başarısız olursa
+        """
+        try:
+            klines = await self.get_klines(symbol, "1m", window)
+            volumes = [float(k[5]) for k in klines]
+            avg_vol = sum(volumes[:-1]) / max(len(volumes) - 1, 1)
+            return volumes[-1] / max(avg_vol, 1)
+        except Exception as e:
+            LOG.error(f"Error calculating volume spike for {symbol}: {e}")
+            raise
+
+    async def funding_rate_alert(self, symbol: str, threshold: float = CONFIG.BINANCE.FUNDING_RATE_THRESHOLD) -> bool:
+        """Funding rate alert kontrolü.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            threshold: Eşik değeri (varsayılan: config'den alınır)
+            
+        Returns:
+            bool: Eşik aşıldıysa True, aksi halde False
+            
+        Raises:
+            Exception: Kontrol başarısız olursa
+        """
+        try:
+            rates = await self.get_funding_rate(symbol)
+            return abs(float(rates[0]["fundingRate"])) > threshold
+        except Exception as e:
+            LOG.error(f"Error checking funding rate alert for {symbol}: {e}")
+            raise
+
+    # --- Gelişmiş Metrikler ---
+    async def get_detailed_metrics(self) -> Dict[str, Any]:
+        """Detaylı metrikleri getir.
+        
+        Returns:
+            Dict[str, Any]: HTTP, WebSocket ve circuit breaker metrikleri
+            
+        Raises:
+            Exception: Metrikler alınamazsa
+        """
+        try:
+            http_metrics = self.http.get_metrics()
+            ws_metrics = self.ws_manager.get_metrics()
+            circuit_status = binance_circuit_breaker.get_status()
+
+            return {
+                "http_metrics": {
+                    "total_requests": http_metrics.total_requests,
+                    "failed_requests": http_metrics.failed_requests,
+                    "cache_hits": http_metrics.cache_hits,
+                    "cache_misses": http_metrics.cache_misses,
+                    "rate_limited_requests": http_metrics.rate_limited_requests,
+                    "avg_response_time": http_metrics.avg_response_time,
+                    "last_request_time": http_metrics.last_request_time,
+                },
+                "ws_metrics": {
+                    "total_connections": ws_metrics.total_connections,
+                    "failed_connections": ws_metrics.failed_connections,
+                    "messages_received": ws_metrics.messages_received,
+                    "reconnections": ws_metrics.reconnections,
+                    "avg_message_rate": ws_metrics.avg_message_rate,
+                },
+                "circuit_breaker": circuit_status,
+                "system": {
+                    "active_ws_connections": len(self.ws_manager.connections),
+                    "cache_size": len(self.http._cache),
+                    "current_time": time.time(),
+                }
+            }
+        except Exception as e:
+            LOG.error(f"Error getting detailed metrics: {e}")
+            raise
+
+    async def close(self) -> None:
+        """Tüm bağlantıları temiz bir şekilde kapat.
+        
+        Raises:
+            Exception: Kapatma işlemi başarısız olursa
+        """
+        try:
+            await self.http.close()
+            await self.ws_manager.close_all()
+            # ayrıca ws._tasks varsa temizle
+            if hasattr(self.ws_manager, "_tasks"):
+                for t in list(self.ws_manager._tasks):
+                    t.cancel()
+                await asyncio.gather(*self.ws_manager._tasks, return_exceptions=True)
+            LOG.info("BinanceClient closed successfully")
+        except Exception as e:
+            LOG.error(f"Error closing BinanceClient: {e}")
+
+
+# -------------------------------------------------------------
+# Global instance for convenience
+# -------------------------------------------------------------
+binance_client: Optional[BinanceClient] = None
+
+def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] = None) -> BinanceClient:
+    """Global BinanceClient instance'ını getir veya oluştur.
     
+    Args:
+        api_key: Binance API anahtarı (opsiyonel)
+        secret_key: Binance gizli anahtarı (opsiyonel)
+        
+    Returns:
+        BinanceClient: BinanceClient instance'ı
+    """
+    global binance_client
+    if binance_client is None:
+        if api_key is None:
+            api_key = os.getenv("BINANCE_API_KEY")
+        if secret_key is None:
+            secret_key = os.getenv("BINANCE_API_SECRET")
+        binance_client = BinanceClient(api_key, secret_key)
+    return binance_client
+
+#EOF
