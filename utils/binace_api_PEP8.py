@@ -573,3 +573,246 @@ class BinanceHTTPClient:
 # -------------------------------------------------------------
 # WebSocket Manager - Gelişmiş Reconnect ve Error Handling
 # -------------------------------------------------------------
+class BinanceWebSocketManager:
+    """Binance WebSocket bağlantılarını yöneten sınıf."""
+    
+    def __init__(self) -> None:
+        """BinanceWebSocketManager sınıfını başlat."""
+        self.connections: Dict[str, websockets.WebSocketClientProtocol] = {}
+        self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
+        self.metrics = WSMetrics()
+        self._running = True
+        self._message_times: List[float] = []
+        self._tasks: Set[asyncio.Task] = set()
+        LOG.info("WebSocket Manager initialized")
+
+    async def _listen_stream(self, stream_name: str) -> None:
+        """WebSocket döngüsü: yeniden bağlanma + callback güvenli çalıştırma.
+        
+        Args:
+            stream_name: Dinlenecek stream adı
+            
+        Raises:
+            Exception: WebSocket bağlantısında veya mesaj işlemede hata
+        """
+        while self._running:
+            try:
+                url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+                async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+                    self.connections[stream_name] = ws
+                    LOG.info(f"WS connected: {stream_name}")
+                    self.metrics.total_connections += 1
+                    
+                    async for msg in ws:
+                        self.metrics.messages_received += 1
+                        self._message_times.append(time.time())
+                        
+                        # Keep only last 100 message times
+                        if len(self._message_times) > 100:
+                            self._message_times.pop(0)
+                        
+                        try:
+                            data = json.loads(msg)
+                        except Exception as e:
+                            LOG.error(f"Failed to parse WS message ({stream_name}): {e}")
+                            continue
+                        
+                        # Execute all callbacks safely
+                        for cb in list(self.callbacks.get(stream_name, [])):
+                            try:
+                                if asyncio.iscoroutinefunction(cb):
+                                    await cb(data)
+                                else:
+                                    cb(data)
+                            except Exception as e:
+                                LOG.error(f"Callback error for {stream_name}: {e}")
+            
+            except Exception as e:
+                self.metrics.failed_connections += 1
+                LOG.warning(f"WS reconnect {stream_name} in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s: {e}")
+                await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
+
+    async def subscribe(self, stream_name: str, callback: Callable[[Any], Any]) -> None:
+        """Yeni bir WebSocket stream'ine subscribe ol.
+        
+        Args:
+            stream_name: Abone olunacak stream adı
+            callback: Gelen mesajları işleyecek callback fonksiyonu
+            
+        Raises:
+            Exception: Bağlantı oluşturulamazsa
+        """
+        if stream_name not in self.connections:
+            await self._create_connection(stream_name)
+        self.callbacks[stream_name].append(callback)
+        LOG.info(f"Subscribed to {stream_name}")
+
+    async def _create_connection(self, stream_name: str) -> websockets.WebSocketClientProtocol:
+        """Yeni WebSocket bağlantısı oluştur.
+        
+        Args:
+            stream_name: Bağlantı oluşturulacak stream adı
+            
+        Returns:
+            websockets.WebSocketClientProtocol: WebSocket bağlantı nesnesi
+            
+        Raises:
+            Exception: Bağlantı oluşturulamazsa
+        """
+        url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+        try:
+            ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
+            self.connections[stream_name] = ws
+            self.metrics.total_connections += 1
+            
+            # Dinleme görevini başlat
+            task = asyncio.create_task(self._listen_stream(stream_name))
+            self._tasks.add(task)
+            task.add_done_callback(lambda t: self._tasks.discard(t))
+            LOG.info(f"WebSocket connection created for {stream_name}")
+            return ws
+            
+        except Exception as e:
+            self.metrics.failed_connections += 1
+            LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
+            raise
+
+    async def _reconnect(self, stream_name: str) -> None:
+        """Bağlantıyı yeniden kur.
+        
+        Args:
+            stream_name: Yeniden bağlanılacak stream adı
+            
+        Raises:
+            Exception: Yeniden bağlantı kurulamazsa
+        """
+        if stream_name in self.connections:
+            try:
+                await self.connections[stream_name].close()
+            except Exception:
+                pass
+            del self.connections[stream_name]
+        self.metrics.reconnections += 1
+        await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
+        if self._running:
+            try:
+                await self._create_connection(stream_name)
+                LOG.info(f"Reconnected to {stream_name}")
+            except Exception as e:
+                LOG.error(f"Failed to reconnect {stream_name}: {e}")
+
+    def start_symbol_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Sembol ticker stream'ini başlat.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            callback: Ticker verilerini işleyecek callback fonksiyonu
+        """
+        stream_name = f"{symbol.lower()}@ticker"
+        asyncio.create_task(self.subscribe(stream_name, callback))
+
+    def start_kline_stream(self, symbol: str, interval: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Kline stream'ini başlat.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            interval: Kline aralığı (örn: 1m, 5m, 1h)
+            callback: Kline verilerini işleyecek callback fonksiyonu
+        """
+        stream_name = f"{symbol.lower()}@kline_{interval}"
+        asyncio.create_task(self.subscribe(stream_name, callback))
+
+    def start_order_book(self, symbol: str, depth: int, callback: Callable[[Dict[str, Any]], Any]) -> None:
+        """Order book stream'ini başlat.
+        
+        Args:
+            symbol: Sembol adı (örn: BTCUSDT)
+            depth: Order book derinliği (5, 10, 20)
+            callback: Order book verilerini işleyecek callback fonksiyonu
+            
+        Raises:
+            ValueError: Geçersiz depth değeri verilirse
+        """
+        if depth not in [5, 10, 20]:
+            raise ValueError("Depth must be one of [5, 10, 20]")
+        stream_name = f"{symbol.lower()}@depth{depth}"
+        asyncio.create_task(self.subscribe(stream_name, callback))
+
+    async def close_all(self) -> None:
+        """Tüm bağlantıları temiz bir şekilde kapat."""
+        self._running = False
+        for stream_name, ws in self.connections.items():
+            try:
+                await ws.close()
+                LOG.info(f"Closed WebSocket connection for {stream_name}")
+            except Exception as e:
+                LOG.error(f"Error closing WebSocket for {stream_name}: {e}")
+        self.connections.clear()
+        self.callbacks.clear()
+        LOG.info("All WebSocket connections closed")
+
+    def get_metrics(self) -> WSMetrics:
+        """WebSocket metriklerini getir.
+        
+        Returns:
+            WSMetrics: WebSocket metrikleri nesnesi
+        """
+        return self.metrics
+
+    def reset_metrics(self) -> None:
+        """Metrikleri sıfırla."""
+        self.metrics = WSMetrics()
+        self._message_times = []
+
+
+# -------------------------------------------------------------
+# Veri Formatı Dönüşüm Fonksiyonları
+# -------------------------------------------------------------
+def klines_to_dataframe(klines: List[List[Any]]) -> pd.DataFrame:
+    """Kline verisini pandas DataFrame'e dönüştür - CCXT uyumlu.
+    
+    Args:
+        klines: Binance kline verisi (liste formatında)
+        
+    Returns:
+        pd.DataFrame: İşlenmiş DataFrame
+        
+    Raises:
+        Exception: Dönüşüm sırasında hata oluşursa
+    """
+    try:
+        # Binance kline formatı: 
+        # [timestamp, open, high, low, close, volume, 
+        #  close_time, quote_asset_volume, number_of_trades, 
+        #  taker_buy_base_asset_volume, taker_buy_quote_asset_volume, ignore]
+        
+        # Sadece ihtiyacımız olan sütunları al
+        df = pd.DataFrame(klines, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades',
+            'taker_buy_base_volume', 'taker_buy_quote_volume', 'ignore'
+        ])
+        
+        # Sadece ihtiyacımız olan sütunları seç
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        
+        # Sayısal kolonları dönüştür
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Timestamp'i datetime'a çevir ve index olarak ayarla
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        
+        return df
+    
+    except Exception as e:
+        LOG.error(f"OHLCV to DataFrame dönüşümünde hata: {e}")
+        # Fallback: boş DataFrame döndür
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
+
+
+# -------------------------------------------------------------
+# BinanceClient Wrapper - YENİ MİMARİ
+# -------------------------------------------------------------
