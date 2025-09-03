@@ -164,48 +164,50 @@ class CircuitBreaker:
         self.success_count = 0
         LOG.info(f"CircuitBreaker '{name}' initialized with threshold {failure_threshold}, timeout {reset_timeout}")
 
-    async def execute(self, func, *args, **kwargs):
-    current_time = time.time()
+	#burası
+	async def execute(self, func, *args, **kwargs):
+	    current_time = time.time()
+	
+	    if self.state == CircuitState.OPEN:
+	        if current_time - self.last_failure_time > self.reset_timeout:
+	            self.state = CircuitState.HALF_OPEN
+	            self.success_count = 0  # Yeni deneme serisi başlat
+	            LOG.warning(f"CircuitBreaker '{self.name}' moving to HALF_OPEN state")
+	        else:
+	            remaining = self.reset_timeout - (current_time - self.last_failure_time)
+	            LOG.error(f"CircuitBreaker '{self.name}' is OPEN. Retry in {remaining:.1f}s")
+	            raise Exception(f"Circuit breaker is OPEN. Retry in {remaining:.1f}s")
+	
+	    try:
+	        result = await func(*args, **kwargs)
+	
+	        if self.state == CircuitState.HALF_OPEN:
+	            self.success_count += 1
+	            if self.success_count >= self.failure_threshold // 2:
+	                self.state = CircuitState.CLOSED
+	                self.failure_count = 0
+	                LOG.info(f"CircuitBreaker '{self.name}' reset to CLOSED state after {self.success_count} successful executions")
+	        else:
+	            self.failure_count = 0  # CLOSED durumunda her başarılı istekte sıfırla
+	
+	        return result
+	
+	    except Exception as e:
+	        self.last_failure_time = time.time()
+	
+	        if self.state == CircuitState.HALF_OPEN:
+	            self.state = CircuitState.OPEN
+	            self.failure_count = self.failure_threshold  # Tekrar açmak için eşiği tetikle
+	            LOG.error(f"CircuitBreaker '{self.name}' reverted to OPEN from HALF_OPEN due to failure")
+	        else:
+	            self.failure_count += 1
+	            if self.failure_count >= self.failure_threshold:
+	                self.state = CircuitState.OPEN
+	                LOG.error(f"CircuitBreaker '{self.name}' tripped to OPEN state due to {self.failure_count} failures")
+	
+	        LOG.error(f"CircuitBreaker '{self.name}' execution failed: {str(e)}")
+	        raise e
 
-    if self.state == CircuitState.OPEN:
-        if current_time - self.last_failure_time > self.reset_timeout:
-            self.state = CircuitState.HALF_OPEN
-            self.success_count = 0  # Yeni deneme serisi başlat
-            LOG.warning(f"CircuitBreaker '{self.name}' moving to HALF_OPEN state")
-        else:
-            remaining = self.reset_timeout - (current_time - self.last_failure_time)
-            LOG.error(f"CircuitBreaker '{self.name}' is OPEN. Retry in {remaining:.1f}s")
-            raise Exception(f"Circuit breaker is OPEN. Retry in {remaining:.1f}s")
-
-    try:
-        result = await func(*args, **kwargs)
-
-        if self.state == CircuitState.HALF_OPEN:
-            self.success_count += 1
-            if self.success_count >= self.failure_threshold // 2:
-                self.state = CircuitState.CLOSED
-                self.failure_count = 0
-                LOG.info(f"CircuitBreaker '{self.name}' reset to CLOSED state after {self.success_count} successful executions")
-        else:
-            self.failure_count = 0  # CLOSED durumunda her başarılı istekte sıfırla
-
-        return result
-
-    except Exception as e:
-        self.last_failure_time = time.time()
-
-        if self.state == CircuitState.HALF_OPEN:
-            self.state = CircuitState.OPEN
-            self.failure_count = self.failure_threshold  # Tekrar açmak için eşiği tetikle
-            LOG.error(f"CircuitBreaker '{self.name}' reverted to OPEN from HALF_OPEN due to failure")
-        else:
-            self.failure_count += 1
-            if self.failure_count >= self.failure_threshold:
-                self.state = CircuitState.OPEN
-                LOG.error(f"CircuitBreaker '{self.name}' tripped to OPEN state due to {self.failure_count} failures")
-
-        LOG.error(f"CircuitBreaker '{self.name}' execution failed: {str(e)}")
-        raise e
 
     def get_status(self) -> Dict[str, Any]:
         return {
@@ -1038,6 +1040,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
