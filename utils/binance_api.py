@@ -188,7 +188,9 @@ class CircuitBreaker:
 	                self.failure_count = 0
 	                LOG.info(f"CircuitBreaker '{self.name}' reset to CLOSED state after {self.success_count} successful executions")
 	        else:
-	            self.failure_count = 0  # CLOSED durumunda her başarılı istekte sıfırla
+	            #self.failure_count = 0  # CLOSED durumunda her başarılı istekte sıfırla
+				if self.state == CircuitState.CLOSED and self.failure_count > 0:
+					self.failure_count = max(0, self.failure_count - 1)
 	
 	        return result
 	
@@ -513,25 +515,25 @@ class BinanceWebSocketManager:
             await self._create_connection(stream_name)
         self.callbacks[stream_name].append(callback)
         LOG.info(f"Subscribed to {stream_name}")
+		
+	async def _create_connection(self, stream_name: str):
+		"""Yeni WebSocket bağlantısı oluştur"""
+		url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+		try:
+			ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
+			self.connections[stream_name] = ws
+			self.metrics.total_connections += 1
 
-    async def _create_connection(self, stream_name: str):
-    """Yeni WebSocket bağlantısı oluştur"""
-    url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-    try:
-        ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
-        self.connections[stream_name] = ws
-        self.metrics.total_connections += 1
-
-        # Eklenecek alan: BinanceWebSocketManager._create_connection
-        task = asyncio.create_task(self._listen_stream(stream_name))
-        self._tasks.add(task)
-        task.add_done_callback(lambda t: self._tasks.discard(t))
-
-        LOG.info(f"WebSocket connection created for {stream_name}")
-    except Exception as e:
-        self.metrics.failed_connections += 1
-        LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
-        raise
+        # Dinleme görevini başlat
+		task = asyncio.create_task(self._listen_stream(stream_name))
+		self._tasks.add(task)
+		task.add_done_callback(lambda t: self._tasks.discard(t))
+		
+		LOG.info(f"WebSocket connection created for {stream_name}")
+except Exception as e:
+	self.metrics.failed_connections += 1
+	LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
+	raise
 
     async def _reconnect(self, stream_name: str):
         """Bağlantıyı yeniden kur"""
@@ -1040,6 +1042,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
