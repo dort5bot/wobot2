@@ -34,14 +34,16 @@ import logging
 import random
 import httpx
 import websockets
+import urllib.parse
 import pandas as pd
-from typing import Any, Dict, List, Optional, Tuple, Callable, Union, Set
+from typing import Any, Dict, List, Optional, Tuple, Callable, Union, Set, Cast
 from aiolimiter import AsyncLimiter
 from urllib.parse import urlencode
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from enum import Enum
 import ccxt.async_support as ccxt
 
@@ -79,7 +81,7 @@ from typing import Dict, Optional, Any
 import ccxt
 
 # LOG nesnesinin tanımlandığını varsayalım (gerçek kodda mevcut olmalı)
-LOG = ...  # Bu satır gerçek uygulamada uygun şekilde tanımlanmalı
+LOG = logging.getLogger(__name__)
 
 
 class BinanceAPI:
