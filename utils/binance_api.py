@@ -1,4 +1,4 @@
-#binance_api.py 901-2211>>902-0051
+#binance_api.py 903-1614
 '''
 ✅ Tüm API çağrıları try-except ile sarıldı
 ✅ Tutarlı logging kullanımı sağlandı
@@ -1027,6 +1027,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
