@@ -29,6 +29,7 @@ import httpx
 import websockets
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple, Callable, Union, Set
+from aiolimiter import AsyncLimiter
 from urllib.parse import urlencode
 from dataclasses import dataclass
 from collections import defaultdict
@@ -237,6 +238,7 @@ class BinanceHTTPClient:
         self.api_key = api_key
         self.secret_key = secret_key
         self._last_request = 0  # Burada girinti düzgün
+		self.limiter = AsyncLimiter(10, 1)  # saniyede max 10 request
         
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
         
@@ -1096,6 +1098,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
