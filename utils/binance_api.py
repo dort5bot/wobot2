@@ -165,44 +165,47 @@ class CircuitBreaker:
         LOG.info(f"CircuitBreaker '{name}' initialized with threshold {failure_threshold}, timeout {reset_timeout}")
 
     async def execute(self, func, *args, **kwargs):
-        current_time = time.time()
-        
-        # Circuit OPEN durumunda ve timeout dolmadıysa
-        if self.state == CircuitState.OPEN:
-            if current_time - self.last_failure_time > self.reset_timeout:
-                self.state = CircuitState.HALF_OPEN
-                LOG.warning(f"CircuitBreaker '{self.name}' moving to HALF_OPEN state")
-            else:
-                remaining = self.reset_timeout - (current_time - self.last_failure_time)
-                LOG.error(f"CircuitBreaker '{self.name}' is OPEN. Retry in {remaining:.1f}s")
-                raise Exception(f"Circuit breaker is OPEN. Retry in {remaining:.1f}s")
-        
-        try:
-            # Fonksiyonu çalıştır
-            start_time = time.time()
-            result = await func(*args, **kwargs)
-            response_time = time.time() - start_time
-            
-            # Başarılı ise state'i güncelle
-            if self.state == CircuitState.HALF_OPEN:
+    current_time = time.time()
+
+    if self.state == CircuitState.OPEN:
+        if current_time - self.last_failure_time > self.reset_timeout:
+            self.state = CircuitState.HALF_OPEN
+            self.success_count = 0  # Yeni deneme serisi başlat
+            LOG.warning(f"CircuitBreaker '{self.name}' moving to HALF_OPEN state")
+        else:
+            remaining = self.reset_timeout - (current_time - self.last_failure_time)
+            LOG.error(f"CircuitBreaker '{self.name}' is OPEN. Retry in {remaining:.1f}s")
+            raise Exception(f"Circuit breaker is OPEN. Retry in {remaining:.1f}s")
+
+    try:
+        result = await func(*args, **kwargs)
+
+        if self.state == CircuitState.HALF_OPEN:
+            self.success_count += 1
+            if self.success_count >= self.failure_threshold // 2:
                 self.state = CircuitState.CLOSED
                 self.failure_count = 0
-                self.success_count += 1
-                LOG.info(f"CircuitBreaker '{self.name}' reset to CLOSED state after successful execution")
-            
-            return result
-            
-        except Exception as e:
-            # Hata durumunda circuit breaker state'ini güncelle
+                LOG.info(f"CircuitBreaker '{self.name}' reset to CLOSED state after {self.success_count} successful executions")
+        else:
+            self.failure_count = 0  # CLOSED durumunda her başarılı istekte sıfırla
+
+        return result
+
+    except Exception as e:
+        self.last_failure_time = time.time()
+
+        if self.state == CircuitState.HALF_OPEN:
+            self.state = CircuitState.OPEN
+            self.failure_count = self.failure_threshold  # Tekrar açmak için eşiği tetikle
+            LOG.error(f"CircuitBreaker '{self.name}' reverted to OPEN from HALF_OPEN due to failure")
+        else:
             self.failure_count += 1
-            self.last_failure_time = time.time()
-            
             if self.failure_count >= self.failure_threshold:
                 self.state = CircuitState.OPEN
                 LOG.error(f"CircuitBreaker '{self.name}' tripped to OPEN state due to {self.failure_count} failures")
-            
-            LOG.error(f"CircuitBreaker '{self.name}' execution failed: {str(e)}")
-            raise e
+
+        LOG.error(f"CircuitBreaker '{self.name}' execution failed: {str(e)}")
+        raise e
 
     def get_status(self) -> Dict[str, Any]:
         return {
@@ -259,16 +262,23 @@ class BinanceHTTPClient:
         self.metrics = RequestMetrics()
         self.request_times = []
 
-    def _cleanup_cache(self):
-        """Expired cache entries'ini temizle"""
-        current_time = time.time()
-        expired_keys = [
-            key for key, (ts, _) in self._cache.items()
-            if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL
-        ]
-        for key in expired_keys:
-            del self._cache[key]
-        LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
+    # Cache temizleme mekanizmasını iyileştirme
+	def _cleanup_cache(self):
+	    """Expired cache entries'ini temizle - daha verimli versiyon"""
+	    current_time = time.time()
+	    if current_time - self._last_cache_cleanup < CONFIG.BINANCE.CACHE_CLEANUP_INTERVAL:
+	        return
+	    
+	    expired_keys = []
+	    for key, (ts, _) in list(self._cache.items()):
+	        if current_time - ts > CONFIG.BINANCE.BINANCE_TICKER_TTL:
+	            expired_keys.append(key)
+	    
+	    for key in expired_keys:
+	        del self._cache[key]
+	    
+	    self._last_cache_cleanup = current_time
+	    LOG.debug(f"Cache cleanup completed. Removed {len(expired_keys)} expired entries.")
 
     async def _request(self, method: str, path: str, params: Optional[dict] = None,
                        signed: bool = False, futures: bool = False, 
@@ -456,36 +466,44 @@ class BinanceWebSocketManager:
         LOG.info("WebSocket Manager initialized")
 
 	# değiştirilecek alan: BinanceWebSocketManager._listen_stream (tamamını yenile)
-	async def _listen_stream(self, stream_name: str):
-		"""WebSocket loop: reconnect + callback safe execution"""
-		url = f"wss://stream.binance.com:9443/ws/{stream_name}"
-		while self._running:
-			try:
-				async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
-					LOG.info(f"WS connected: {stream_name}")
-					self.metrics.total_connections += 1
-					async for msg in ws:
-						self.metrics.messages_received += 1
-						self._message_times.append(time.time())
-						if len(self._message_times) > 100:
-							self._message_times.pop(0)
-						try:
-							data = json.loads(msg)
-						except Exception as pe:
-							LOG.error(f"Failed to parse WS message ({stream_name}): {pe}")
-							continue
-						for cb in list(self.callbacks.get(stream_name, [])):
-							try:
-								if asyncio.iscoroutinefunction(cb):
-									asyncio.create_task(cb(data))
-								else:
-									asyncio.get_running_loop().run_in_executor(None, cb, data)
-							except Exception as e:
-								LOG.error(f"Callback error for {stream_name}: {e}")
-			except Exception as e:
-				self.metrics.failed_connections += 1
-				LOG.warning(f"WS reconnect {stream_name} in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s: {e}")
-				await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
+    async def _listen_stream(self, stream_name: str):
+        """WebSocket loop: reconnect + callback safe execution"""
+        while self._running:
+            try:
+                url = f"wss://stream.binance.com:9443/ws/{stream_name}"
+                async with websockets.connect(url, ping_interval=20, ping_timeout=10) as ws:
+                    self.connections[stream_name] = ws
+                    LOG.info(f"WS connected: {stream_name}")
+                    self.metrics.total_connections += 1
+
+                    async for msg in ws:
+                        self.metrics.messages_received += 1
+                        self._message_times.append(time.time())
+
+                        # Keep only last 100 message times
+                        if len(self._message_times) > 100:
+                            self._message_times.pop(0)
+
+                        try:
+                            data = json.loads(msg)
+                        except Exception as e:
+                            LOG.error(f"Failed to parse WS message ({stream_name}): {e}")
+                            continue
+
+                        # Execute all callbacks safely
+                        for cb in list(self.callbacks.get(stream_name, [])):
+                            try:
+                                if asyncio.iscoroutinefunction(cb):
+                                    asyncio.create_task(cb(data))
+                                else:
+                                    asyncio.get_running_loop().run_in_executor(None, cb, data)
+                            except Exception as e:
+                                LOG.error(f"Callback error for {stream_name}: {e}")
+
+            except Exception as e:
+                self.metrics.failed_connections += 1
+                LOG.warning(f"WS reconnect {stream_name} in {CONFIG.BINANCE.WS_RECONNECT_DELAY}s: {e}")
+                await asyncio.sleep(CONFIG.BINANCE.WS_RECONNECT_DELAY)
 
     async def subscribe(self, stream_name: str, callback: Callable):
         """Yeni bir WebSocket stream'ine subscribe ol"""
@@ -512,38 +530,6 @@ class BinanceWebSocketManager:
         self.metrics.failed_connections += 1
         LOG.error(f"Failed to create WS connection for {stream_name}: {e}")
         raise
-
-
-    async def _listen_stream(self, stream_name: str):
-        """Belirli bir stream'i dinle"""
-        while self._running and stream_name in self.connections:
-            try:
-                ws = self.connections[stream_name]
-                msg = await ws.recv()
-                
-                receive_time = time.time()
-                self.metrics.messages_received += 1
-                self._message_times.append(receive_time)
-                
-                # Message rate hesapla
-                if len(self._message_times) > 100:
-                    self._message_times.pop(0)
-                if len(self._message_times) > 1:
-                    time_diff = self._message_times[-1] - self._message_times[0]
-                    self.metrics.avg_message_rate = len(self._message_times) / time_diff if time_diff > 0 else 0
-                
-                data = json.loads(msg)
-                for callback in self.callbacks[stream_name]:
-                    try:
-                        await callback(data)
-                    except Exception as e:
-                        LOG.error(f"Callback error for {stream_name}: {e}")
-            except websockets.ConnectionClosed:
-                LOG.warning(f"Connection closed for {stream_name}, reconnecting...")
-                await self._reconnect(stream_name)
-            except Exception as e:
-                LOG.error(f"Error in stream {stream_name}: {e}")
-                await self._reconnect(stream_name)
 
     async def _reconnect(self, stream_name: str):
         """Bağlantıyı yeniden kur"""
@@ -1027,6 +1013,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
