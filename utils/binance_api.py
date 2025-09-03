@@ -321,6 +321,7 @@ class BinanceHTTPClient:
         self.api_key = api_key
         self.secret_key = secret_key
         self._last_request = 0
+        self.client = None  # Client'ı __aenter__'da oluşturacağız
 
         # 🔹 aiolimiter: config üzerinden ayarlanabilir
         self.limiter = AsyncLimiter(
@@ -329,21 +330,6 @@ class BinanceHTTPClient:
         )
 
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
-
-        # 🔹 HTTP client configuration
-        # BinanceHTTPClient'da kullanın:
-        self.client = httpx.AsyncClient(
-            base_url=CONFIG.BINANCE.BASE_URL,
-            timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
-            limits=httpx.Limits(
-                max_connections=CONFIG.BINANCE.MAX_CONNECTIONS,
-                max_keepalive_connections=CONFIG.BINANCE.MAX_KEEPALIVE_CONNECTIONS,
-                keepalive_expiry=300
-            ),
-            http2=True,
-            verify=True,
-            cert=os.getenv("SSL_CERT_PATH")
-        )
 
         # 🔹 Concurrency control with priority support
         self.semaphores = {
@@ -363,6 +349,26 @@ class BinanceHTTPClient:
         # 🔹 Metrics
         self.metrics = RequestMetrics()
         self.request_times: List[float] = []
+
+    async def __aenter__(self):
+        """Async context manager entry - client'ı oluştur ve başlat"""
+        self.client = httpx.AsyncClient(
+            base_url=CONFIG.BINANCE.BASE_URL,
+            timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
+            limits=httpx.Limits(
+                max_connections=CONFIG.BINANCE.MAX_CONNECTIONS,
+                max_keepalive_connections=CONFIG.BINANCE.MAX_KEEPALIVE_CONNECTIONS,
+                keepalive_expiry=300
+            ),
+            http2=True,
+            verify=True,
+            cert=os.getenv("SSL_CERT_PATH")
+        )
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - client'ı temizle"""
+        await self.close()
 
     def _cleanup_cache(self) -> None:
         """Süresi dolmuş önbellek girdilerini temizle - daha verimli versiyon."""
@@ -419,6 +425,10 @@ class BinanceHTTPClient:
             ValueError: İmzalı istek için API anahtarı yoksa
             Exception: Maksimum yeniden deneme sayısı aşılırsa veya diğer hatalar
         """
+        # Client'ın başlatıldığından emin ol
+        if self.client is None:
+            raise RuntimeError("HTTP client not initialized. Use async context manager.")
+
         try:
             if max_retries is None:
                 max_retries = CONFIG.BINANCE.DEFAULT_RETRY_ATTEMPTS
@@ -577,12 +587,13 @@ class BinanceHTTPClient:
 
     async def close(self) -> None:
         """HTTP client'ı temiz bir şekilde kapat."""
-        try:
-            await self.client.aclose()
-            LOG.info("HTTP client closed successfully")
-        except Exception as e:
-            LOG.error(f"Error closing HTTP client: {e}")
-
+        if self.client:
+            try:
+                await self.client.aclose()
+                self.client = None
+                LOG.info("HTTP client closed successfully")
+            except Exception as e:
+                LOG.error(f"Error closing HTTP client: {e}")
 # -------------------------------------------------------------
 # WebSocket Manager - Gelişmiş Reconnect ve Error Handling
 # -------------------------------------------------------------
