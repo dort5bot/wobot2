@@ -750,6 +750,31 @@ class BinanceClient:
             LOG.error(f"Error getting all 24h tickers: {e}")
             raise
 
+	# BinanceClient sınıfına eklenmesi gereken fonksiyon
+	async def get_all_tickers(self) -> Dict[str, Any]:
+	    """Tüm sembollerin anlık fiyatlarını getir"""
+	    try:
+	        return await binance_circuit_breaker.execute(
+	            self.http._request, "GET", "/api/v3/ticker/price"
+	        )
+	    except Exception as e:
+	        LOG.error(f"Error getting all tickers: {e}")
+	        raise
+	
+	async def get_historical_trades(self, symbol: str, from_id: Optional[int] = None, limit: int = 500) -> List[Dict[str, Any]]:
+	    """Geçmiş trade verilerini getir"""
+	    try:
+	        params = {"symbol": symbol.upper(), "limit": limit}
+	        if from_id:
+	            params["fromId"] = from_id
+	            
+	        return await binance_circuit_breaker.execute(
+	            self.http._request, "GET", "/api/v3/historicalTrades", params=params
+	        )
+	    except Exception as e:
+	        LOG.error(f"Error getting historical trades for {symbol}: {e}")
+	        raise
+
     async def get_all_symbols(self) -> List[str]:
         """Tüm sembol listesini getir"""
         try:
@@ -1013,6 +1038,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
