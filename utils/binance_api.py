@@ -39,6 +39,17 @@ import ccxt.async_support as ccxt  # ✅ CCXT ile değiştir
 from utils.config import CONFIG
 
 # -------------------------------------------------------------
+# Config Validation - Eksik ayarları kontrol et
+# -------------------------------------------------------------
+def _validate_config():
+    required = ["BASE_URL", "REQUEST_TIMEOUT", "CONCURRENCY", "CACHE_TTL", "WS_RECONNECT_DELAY", "LOG_LEVEL"]
+    missing = [r for r in required if not hasattr(CONFIG.BINANCE, r)]
+    if missing:
+        raise RuntimeError(f"Missing Binance config keys: {missing}")
+
+_validate_config()
+
+# -------------------------------------------------------------
 # Logger - Tüm dosyada tutarlı logging
 # -------------------------------------------------------------
 LOG = logging.getLogger(__name__)
@@ -305,17 +316,25 @@ class BinanceHTTPClient:
                 self._last_cache_cleanup = current_time_cleanup
 
             # Cache key oluştur
-            cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
-            ttl = CONFIG.BINANCE.BINANCE_TICKER_TTL
-            
-            # Cache hit kontrolü
-            if ttl > 0 and cache_key in self._cache:
-                ts_cache, data = self._cache[cache_key]
-                if time.time() - ts_cache < ttl:
-                    self.metrics.cache_hits += 1
-                    LOG.debug(f"Cache hit for {cache_key}")
-                    return data
-                self.metrics.cache_misses += 1
+			cache_key = f"{method}:{base_url}{path}:{json.dumps(params, sort_keys=True) if params else ''}"
+			ttl = CONFIG.BINANCE.BINANCE_TICKER_TTL
+		
+			# Cache hit kontrolü
+			if ttl > 0 and cache_key in self._cache:
+				ts_cache, data = self._cache[cache_key]
+				if time.time() - ts_cache < ttl:
+					self.metrics.cache_hits += 1
+					LOG.debug(f"Cache hit for {cache_key}")
+					return data
+				else:
+					self.metrics.cache_misses += 1
+					del self._cache[cache_key]
+		
+					# 🔹 Yeni: Max cache size kontrolü
+					if len(self._cache) > 1000:
+						oldest_key = min(self._cache, key=lambda k: self._cache[k][0])
+						del self._cache[oldest_key]
+						LOG.debug(f"Cache limit aşıldı. En eski kayıt silindi: {oldest_key}")
 
             # Retry loop
             attempt = 0
@@ -371,13 +390,17 @@ class BinanceHTTPClient:
                         LOG.error(f"HTTP error {e.response.status_code} for {path}: {e}")
                         raise
                         
-                except (httpx.RequestError, asyncio.TimeoutError) as e:
-                    # Network hataları için retry
-                    last_exception = e
-                    self.metrics.failed_requests += 1
-                    delay = min(2 ** attempt, 60)
-                    LOG.error(f"Request error for {path}: {e}, retrying in {delay}s")
-                    await asyncio.sleep(delay)
+                #
+				except (httpx.RequestError, asyncio.TimeoutError) as e:
+					 # Network hataları için retry
+					 last_exception = e
+					 self.metrics.failed_requests += 1
+					
+					 # 🔹 Yeni: Exponential backoff + jitter
+					delay = min(2 ** attempt, 60) + random.uniform(0, 0.3)
+					LOG.error(f"Request error for {path}: {e}, retrying in {delay:.1f}s")
+					await asyncio.sleep(delay)
+
             
             # Tüm retry'lar başarısız oldu
             raise last_exception or Exception(f"Max retries ({max_retries}) exceeded for {path}")
@@ -997,6 +1020,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
