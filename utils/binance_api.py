@@ -687,14 +687,30 @@ class BinanceClient:
         except Exception as e:
             LOG.error(f"Error getting exchange info: {e}")
             raise
-
-    async def get_symbol_price(self, symbol: str) -> Dict[str, Any]:
-        """Sembol fiyatını getir"""
-        try:
-            return await self.http.get_symbol_price(symbol)
-        except Exception as e:
-            LOG.error(f"Error getting symbol price for {symbol}: {e}")
-            raise
+	#ek
+	async def get_symbol_price(self, symbol: str) -> Dict[str, Any]:
+	    """
+	    Sembol fiyatını getir.
+	    
+	    Args:
+	        symbol: Sembol adı (ör: BTCUSDT)
+	        
+	    Returns:
+	        Dict[str, Any]: Fiyat bilgisi içeren sözlük
+	        
+	    Raises:
+	        ValueError: Geçersiz sembol adı
+	        ConnectionError: API bağlantı hatası
+	    """
+	    try:
+	        symbol = symbol.upper().strip()
+	        if not symbol:
+	            raise ValueError("Symbol cannot be empty")
+	            
+	        return await self.http.get_symbol_price(symbol)
+	    except Exception as e:
+	        LOG.error(f"Error getting symbol price for {symbol}: {e}")
+	        raise
 
     async def get_order_book(self, symbol: str, limit: int = 100) -> Dict[str, Any]:
         """Order book verisini getir"""
@@ -849,6 +865,27 @@ class BinanceClient:
         except Exception as e:
             LOG.error(f"Error placing order for {symbol}: {e}")
             raise
+
+	#yeni ek
+	async def get_account_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
+		"""Hesap bakiyesini getir"""
+		try:
+			await self._require_keys()
+			account_info = await binance_circuit_breaker.execute(
+				self.http._request, "GET", "/api/v3/account", signed=True
+			)
+
+        if asset:
+			asset = asset.upper()
+			for balance in account_info.get('balances', []):
+				if balance['asset'] == asset:
+					return balance
+			return {}
+
+        return account_info
+    except Exception as e:
+        LOG.error(f"Error getting account balance: {e}")
+        raise
 
     async def futures_position_info(self) -> List[Dict[str, Any]]:
         """Futures pozisyon bilgilerini getir"""
@@ -1058,6 +1095,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
