@@ -128,6 +128,7 @@ class BinanceAPI:
             else:
                 self.global_client = ccxt.binance(config)
                 LOG.warning(".env'de API key bulunamadı, anonymous CCXT client oluşturuldu")
+
                 
             # CCXT client'ını load markets ile initialize et
             await self.global_client.load_markets()
@@ -1300,7 +1301,7 @@ class BinanceClient:
     # -----------
     # --- WebSocket Methods ---
     # -----------
-        async def ws_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
+     async def ws_ticker(self, symbol: str, callback: Callable[[Dict[str, Any]], Any]) -> None:
         """WebSocket ticker stream'ine subscribe ol.
         
         Args:
