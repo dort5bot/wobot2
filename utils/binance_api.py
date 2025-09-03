@@ -239,13 +239,17 @@ class BinanceHTTPClient:
         
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
         
-        # HTTP client configuration
-        self.client = httpx.AsyncClient(
-            base_url=CONFIG.BINANCE.BASE_URL, 
-            timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
-            limits=httpx.Limits(max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
-                                max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY)
-        )
+		# HTTP client configuration - mevcut koda ekleme
+		self.client = httpx.AsyncClient(
+		base_url=CONFIG.BINANCE.BASE_URL, 
+		timeout=CONFIG.BINANCE.REQUEST_TIMEOUT,
+			limits=httpx.Limits(
+				max_connections=CONFIG.BINANCE.CONCURRENCY * 2,
+				max_keepalive_connections=CONFIG.BINANCE.CONCURRENCY,
+				keepalive_expiry=300  # 5 dakika
+			),
+			http2=True  HTTP/2 desteği
+		)
         
         # Concurrency control with priority support
         self.semaphores = {
@@ -1051,6 +1055,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
