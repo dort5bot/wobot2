@@ -880,27 +880,39 @@ class BinanceClient:
             LOG.error(f"Error placing order for {symbol}: {e}")
             raise
 
-	#2
+	# BinanceClient sınıfına eklenmesi gereken fonksiyon
 	async def get_account_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
-		"""Hesap bakiyesini getir"""
-		try:
-			await self._require_keys()
-			account_info = await binance_circuit_breaker.execute(
-				self.http._request, "GET", "/api/v3/account", {}, True
-			)
-
-        if asset:
-			asset = asset.upper()
-			for balance in account_info.get('balances', []):
-				if balance.get('asset') == asset:
-					return balance
-			return {}
-
-        return account_info
-
-    except Exception as e:
-        LOG.error(f"Error getting account balance: {e}")
-        raise
+	    """Hesap bakiyesini getir"""
+	    try:
+	        await self._require_keys()
+	        account_info = await binance_circuit_breaker.execute(
+	            self.http._request, "GET", "/api/v3/account", {}, True
+	        )
+	
+	        if asset:
+	            asset = asset.upper()
+	            for balance in account_info.get('balances', []):
+	                if balance.get('asset') == asset:
+	                    return balance
+	            return {}
+	
+	        return account_info
+	
+	    except Exception as e:
+	        LOG.error(f"Error getting account balance: {e}")
+	        raise
+	
+	async def create_listen_key(self) -> str:
+	    """Private websocket için listenKey oluşturur"""
+	    try:
+	        await self._require_keys()
+	        res = await self.http._request(
+	            "POST", "/api/v3/userDataStream", signed=False
+	        )
+	        return res.get("listenKey")
+	    except Exception as e:
+	        LOG.error(f"Error creating listenKey: {e}")
+	        raise
 
 
     async def futures_position_info(self) -> List[Dict[str, Any]]:
@@ -1111,6 +1123,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
