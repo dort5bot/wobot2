@@ -228,6 +228,7 @@ class BinanceHTTPClient:
         # 🔹 user_id parametresi KALDIRILDI
         self.api_key = api_key
         self.secret_key = secret_key
+		self._last_request = 0
         
         LOG.info(f"HTTP Client initialized, has_keys: {bool(self.api_key and self.secret_key)}")
         
@@ -998,9 +999,15 @@ class BinanceClient:
         try:
             await self.http.close()
             await self.ws_manager.close_all()
+            # ayrıca ws._tasks varsa temizle
+            if hasattr(self.ws_manager, "_tasks"):
+                for t in list(self.ws_manager._tasks):
+                    t.cancel()
+                await asyncio.gather(*self.ws_manager._tasks, return_exceptions=True)
             LOG.info("BinanceClient closed successfully")
         except Exception as e:
             LOG.error(f"Error closing BinanceClient: {e}")
+
 
 # -------------------------------------------------------------
 # Global instance for convenience
@@ -1020,6 +1027,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
