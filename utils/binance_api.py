@@ -852,26 +852,28 @@ class BinanceClient:
             LOG.error(f"Error placing order for {symbol}: {e}")
             raise
 
-	#yeni ek
+	#2
 	async def get_account_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
 		"""Hesap bakiyesini getir"""
 		try:
 			await self._require_keys()
 			account_info = await binance_circuit_breaker.execute(
-				self.http._request, "GET", "/api/v3/account", signed=True
+				self.http._request, "GET", "/api/v3/account", {}, True
 			)
 
         if asset:
 			asset = asset.upper()
 			for balance in account_info.get('balances', []):
-				if balance['asset'] == asset:
+				if balance.get('asset') == asset:
 					return balance
 			return {}
 
         return account_info
+
     except Exception as e:
         LOG.error(f"Error getting account balance: {e}")
         raise
+
 
     async def futures_position_info(self) -> List[Dict[str, Any]]:
         """Futures pozisyon bilgilerini getir"""
@@ -1081,6 +1083,7 @@ def get_binance_client(api_key: Optional[str] = None, secret_key: Optional[str] 
 
 
 # EOF
+
 
 
 
